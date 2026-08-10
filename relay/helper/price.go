@@ -187,6 +187,12 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hosttypes.PriceData, error) {
 	groupRatioInfo := HandleGroupRatio(c, info)
 
+	// 视频按秒计费的模型只需配置每秒单价，不应再要求额外的按次价格/倍率。
+	// 真正的额度计算（单价 × 时长）在 RelayTaskSubmit 的按秒计费步骤完成。
+	if secondPrice, ok := ratio_setting.GetVideoSecondPrice(info.OriginModelName); ok {
+		return buildVideoSecondPriceData(secondPrice, groupRatioInfo)
+	}
+
 	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
 	usePrice := success
 	var modelRatio float64
@@ -252,7 +258,32 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 	return priceData, nil
 }
 
+// buildVideoSecondPriceData 构造按秒计费的基础价格数据。
+// Quota 此处仅为「1 秒」的额度，时长倍率由 RelayTaskSubmit 统一应用。
+func buildVideoSecondPriceData(secondPrice float64, groupRatioInfo hosttypes.GroupRatioInfo) (hosttypes.PriceData, error) {
+	quota, err := common.QuotaFromFloatStrict(secondPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+	if err != nil {
+		return hosttypes.PriceData{}, err
+	}
+	freeModel := false
+	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && groupRatioInfo.GroupRatio == 0 {
+		quota = 0
+		freeModel = true
+	}
+	return hosttypes.PriceData{
+		FreeModel:        freeModel,
+		ModelPrice:       secondPrice,
+		UsePrice:         true,
+		Quota:            quota,
+		VideoSecondPrice: secondPrice,
+		GroupRatioInfo:   groupRatioInfo,
+	}, nil
+}
+
 func HasModelBillingConfig(modelName string) bool {
+	if _, ok := ratio_setting.GetVideoSecondPrice(modelName); ok {
+		return true
+	}
 	if _, ok := ratio_setting.GetModelPrice(modelName, false); ok {
 		return true
 	}

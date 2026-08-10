@@ -957,6 +957,9 @@ type TaskInfo struct {
 	Progress         string `json:"progress,omitempty"`
 	CompletionTokens int    `json:"completion_tokens,omitempty"` // 用于按倍率计费
 	TotalTokens      int    `json:"total_tokens,omitempty"`      // 用于按倍率计费
+	// DurationSeconds 上游返回的实际视频时长（秒），用于按秒计费的差额结算。
+	// 上游未返回时保持 0，此时按请求时长计费不做调整。
+	DurationSeconds int `json:"duration_seconds,omitempty"`
 }
 
 func FailTaskInfo(reason string) *TaskInfo {

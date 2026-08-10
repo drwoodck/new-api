@@ -107,3 +107,11 @@ export function replaceModelInPath(path: string, modelName: string): string {
 export function isTokenBasedModel(model: PricingModel): boolean {
   return model.quota_type === QUOTA_TYPE_VALUES.TOKEN
 }
+
+/**
+ * Check if model is billed per second of generated video.
+ * These models report model_price as USD per second, not per request.
+ */
+export function isPerSecondModel(model: PricingModel): boolean {
+  return (model.video_second_price ?? 0) > 0
+}

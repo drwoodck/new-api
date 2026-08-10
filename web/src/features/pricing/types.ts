@@ -43,6 +43,8 @@ export type PricingModel = {
   cache_ratio?: number | null
   create_cache_ratio?: number | null
   image_ratio?: number | null
+  /** USD per second of generated video; set only for per-second billed video models */
+  video_second_price?: number | null
   audio_ratio?: number | null
   audio_completion_ratio?: number | null
   enable_groups: string[]

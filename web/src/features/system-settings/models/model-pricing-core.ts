@@ -31,6 +31,7 @@ export const createModelPricingSchema = (t: (key: string) => string) =>
     createCacheRatio: z.string().optional(),
     completionRatio: z.string().optional(),
     imageRatio: z.string().optional(),
+    videoSecondPrice: z.string().optional(),
     audioRatio: z.string().optional(),
     audioCompletionRatio: z.string().optional(),
   })
@@ -57,6 +58,7 @@ export type ModelRatioData = {
   createCacheRatio?: string
   completionRatio?: string
   imageRatio?: string
+  videoSecondPrice?: string
   audioRatio?: string
   audioCompletionRatio?: string
   billingMode?: PricingMode
@@ -231,13 +233,21 @@ export function buildPreviewRows(
   }
 
   if (mode === 'per-request') {
-    return [
+    const rows: PreviewRow[] = [
       {
         key: 'price',
         label: 'ModelPrice',
         value: values.price || t('Empty'),
       },
     ]
+    if (values.videoSecondPrice) {
+      rows.push({
+        key: 'videoSecondPrice',
+        label: 'VideoSecondPrice',
+        value: `$${values.videoSecondPrice} / ${t('second')}`,
+      })
+    }
+    return rows
   }
 
   return [

@@ -168,6 +168,7 @@ export const ModelPricingEditorPanel = forwardRef<
       createCacheRatio: '',
       completionRatio: '',
       imageRatio: '',
+      videoSecondPrice: '',
       audioRatio: '',
       audioCompletionRatio: '',
     },
@@ -185,6 +186,7 @@ export const ModelPricingEditorPanel = forwardRef<
         createCacheRatio: editData.createCacheRatio || '',
         completionRatio: editData.completionRatio || '',
         imageRatio: editData.imageRatio || '',
+        videoSecondPrice: editData.videoSecondPrice || '',
         audioRatio: editData.audioRatio || '',
         audioCompletionRatio: editData.audioCompletionRatio || '',
       })
@@ -206,6 +208,7 @@ export const ModelPricingEditorPanel = forwardRef<
         createCacheRatio: '',
         completionRatio: '',
         imageRatio: '',
+        videoSecondPrice: '',
         audioRatio: '',
         audioCompletionRatio: '',
       })
@@ -387,6 +390,15 @@ export const ModelPricingEditorPanel = forwardRef<
       )
     }
 
+    // 按秒计费会接管整次调用的定价，与固定按次单价互斥
+    if (hasValue(editData?.videoSecondPrice) && hasValue(editData?.price)) {
+      nextWarnings.push(
+        t(
+          'Video per-second price takes precedence over the fixed request price for this model.'
+        )
+      )
+    }
+
     if (
       pricingMode === 'per-token' &&
       toNumberOrNull(promptPrice) === null &&
@@ -449,6 +461,7 @@ export const ModelPricingEditorPanel = forwardRef<
         createCacheRatio: values.createCacheRatio || '',
         completionRatio: values.completionRatio || '',
         imageRatio: values.imageRatio || '',
+        videoSecondPrice: values.videoSecondPrice || '',
         audioRatio: values.audioRatio || '',
         audioCompletionRatio: values.audioCompletionRatio || '',
       }
@@ -629,6 +642,45 @@ export const ModelPricingEditorPanel = forwardRef<
                               <FieldDescription>
                                 {t(
                                   'Cost in USD per request, regardless of tokens used.'
+                                )}
+                              </FieldDescription>
+                              <FormMessage />
+                            </Field>
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name='videoSecondPrice'
+                        render={({ field }) => (
+                          <FormItem className='contents'>
+                            <Field>
+                              <FieldLabel>
+                                {t('Video per-second price')}
+                              </FieldLabel>
+                              <FormControl>
+                                <InputGroup>
+                                  <InputGroupAddon>$</InputGroupAddon>
+                                  <InputGroupInput
+                                    inputMode='decimal'
+                                    placeholder='0.10'
+                                    {...field}
+                                    onChange={(event) => {
+                                      const value = event.target.value
+                                      if (numericDraftRegex.test(value)) {
+                                        field.onChange(value)
+                                      }
+                                    }}
+                                  />
+                                  <InputGroupAddon align='inline-end'>
+                                    {t('per second')}
+                                  </InputGroupAddon>
+                                </InputGroup>
+                              </FormControl>
+                              <FieldDescription>
+                                {t(
+                                  'For video models: cost in USD per second of generated video. Overrides the fixed price and is settled against the actual video length.'
                                 )}
                               </FieldDescription>
                               <FormMessage />

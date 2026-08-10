@@ -194,8 +194,13 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	}
 
+	// 5.5 视频按秒计费：基础额度已是「1 秒的额度」，这里把时长写入 seconds 倍率
+	//     （同 key 覆盖适配器的取值，避免与其硬编码按秒逻辑重复计费）。
+	perSecondBilling := applyVideoSecondPricing(c, info)
+
 	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
-	if !common.StringsContains(constant.TaskPricePatches, modelName) {
+	//    按秒计费是管理员显式配置，优先级高于 TaskPricePatches 环境变量。
+	if perSecondBilling || !common.StringsContains(constant.TaskPricePatches, modelName) {
 		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
 		quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
 		info.PriceData.Quota = quota
@@ -243,6 +248,21 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := info.PriceData.Quota
 	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
+		// 按秒计费的基础额度是「每秒单价」，seconds 倍率是计费的必要组成部分。
+		// 适配器若未在调整结果里带上 seconds，直接替换会丢掉时长导致少扣费。
+		// 不改动适配器返回的 map（可能被其内部复用），这里按需复制。
+		if perSecondBilling {
+			if _, exists := adjustedRatios["seconds"]; !exists {
+				if seconds := info.PriceData.OtherRatios()["seconds"]; seconds > 0 {
+					merged := make(map[string]float64, len(adjustedRatios)+1)
+					for key, ratio := range adjustedRatios {
+						merged[key] = ratio
+					}
+					merged["seconds"] = seconds
+					adjustedRatios = merged
+				}
+			}
+		}
 		if adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
 			// 基于调整后的 ratios 重新计算 quota
 			finalQuota = adjustedQuota
@@ -257,6 +277,36 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		Platform:       platform,
 		Quota:          finalQuota,
 	}, nil
+}
+
+// applyVideoSecondPricing 为按秒计费的模型解析并注入时长倍率。
+//
+// 基础额度（1 秒的额度 = 每秒单价 × QuotaPerUnit × 分组倍率）已由
+// ModelPriceHelperPerCall 算好，这里只负责把时长写进 seconds 倍率，
+// 最终额度由步骤 6 统一算成：1 秒额度 × 时长 × 其他倍率（分辨率等）。
+//
+// 返回 true 表示该模型走按秒计费。未配置每秒单价时不做任何改动并返回 false，
+// 保证存量部署行为不变。
+func applyVideoSecondPricing(c *gin.Context, info *relaycommon.RelayInfo) bool {
+	// 以 PriceData 为唯一判据：基础额度必须由 ModelPriceHelperPerCall 按
+	// 每秒单价算出，否则乘上时长会得到错误金额。两者查的是同一个模型名。
+	if info.PriceData.VideoSecondPrice <= 0 {
+		return false
+	}
+
+	// 时长优先取适配器在 EstimateBilling 中给出的 seconds（已按各渠道语义钳制），
+	// 缺失时回退到通用解析（请求字段 → metadata → 渠道默认值）。
+	duration := info.PriceData.OtherRatios()["seconds"]
+	if duration <= 0 {
+		duration = float64(relaycommon.ResolveTaskVideoDuration(c, info.ChannelType))
+	}
+	if duration <= 0 {
+		return false
+	}
+
+	// 同 key 覆盖适配器的 seconds，避免与硬编码按秒逻辑重复计费
+	info.PriceData.AddOtherRatio("seconds", duration)
+	return true
 }
 
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。

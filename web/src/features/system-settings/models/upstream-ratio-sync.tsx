@@ -74,6 +74,7 @@ type UpstreamRatioSyncProps = {
     CacheRatio: string
     CreateCacheRatio: string
     ImageRatio: string
+    VideoSecondPrice: string
     AudioRatio: string
     AudioCompletionRatio: string
     'billing_setting.billing_mode': string

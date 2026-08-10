@@ -29,6 +29,7 @@ type Pricing struct {
 	CacheRatio             *float64                `json:"cache_ratio,omitempty"`
 	CreateCacheRatio       *float64                `json:"create_cache_ratio,omitempty"`
 	ImageRatio             *float64                `json:"image_ratio,omitempty"`
+	VideoSecondPrice       *float64                `json:"video_second_price,omitempty"`
 	AudioRatio             *float64                `json:"audio_ratio,omitempty"`
 	AudioCompletionRatio   *float64                `json:"audio_completion_ratio,omitempty"`
 	EnableGroup            []string                `json:"enable_groups"`
@@ -391,6 +392,12 @@ func updatePricing() {
 		}
 		if imageRatio, ok := ratio_setting.GetImageRatio(model); ok {
 			pricing.ImageRatio = &imageRatio
+		}
+		// 视频按秒计费：单价语义为 $/秒，前端据此展示「按秒计费」
+		if videoSecondPrice, ok := ratio_setting.GetVideoSecondPrice(model); ok {
+			pricing.VideoSecondPrice = &videoSecondPrice
+			pricing.ModelPrice = videoSecondPrice
+			pricing.QuotaType = 1
 		}
 		if ratio_setting.ContainsAudioRatio(model) {
 			audioRatio := ratio_setting.GetAudioRatio(model)
