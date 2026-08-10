@@ -28,6 +28,7 @@ export type ModelPricingSnapshotInput = {
   createCacheRatio: string
   completionRatio: string
   imageRatio: string
+  videoSecondPrice: string
   audioRatio: string
   audioCompletionRatio: string
   billingMode: string
@@ -42,6 +43,7 @@ export type ModelPricingSnapshot = {
   createCacheRatio?: string
   completionRatio?: string
   imageRatio?: string
+  videoSecondPrice?: string
   audioRatio?: string
   audioCompletionRatio?: string
   billingMode?: string
@@ -112,6 +114,10 @@ export const getPriceSummary = (
   if (row.billingMode === 'tiered_expr') {
     return getExpressionSummary(row, t)
   }
+  // 按秒计费优先于按次/按量展示：单价语义不同（$/秒 而非 $/次）
+  if (hasPricingValue(row.videoSecondPrice)) {
+    return `$${row.videoSecondPrice} / ${t('second')}`
+  }
   if (row.billingMode === 'per-request') {
     return row.price ? `$${row.price} / ${t('request')}` : t('Unset price')
   }
@@ -142,6 +148,9 @@ export const getPriceDetail = (
       ? t('Includes request rules')
       : t('Expression based')
   }
+  if (hasPricingValue(row.videoSecondPrice)) {
+    return t('Billed by video duration')
+  }
   if (row.billingMode === 'per-request') {
     return t('Fixed request price')
   }
@@ -170,6 +179,7 @@ export const buildModelSnapshots = ({
   createCacheRatio,
   completionRatio,
   imageRatio,
+  videoSecondPrice,
   audioRatio,
   audioCompletionRatio,
   billingMode,
@@ -199,6 +209,10 @@ export const buildModelSnapshots = ({
     fallback: {},
     context: 'image ratios',
   })
+  const videoSecondMap = safeJsonParse<Record<string, number>>(
+    videoSecondPrice,
+    { fallback: {}, context: 'video per-second prices' }
+  )
   const audioMap = safeJsonParse<Record<string, number>>(audioRatio, {
     fallback: {},
     context: 'audio ratios',
@@ -223,6 +237,7 @@ export const buildModelSnapshots = ({
     ...Object.keys(createCacheMap),
     ...Object.keys(completionMap),
     ...Object.keys(imageMap),
+    ...Object.keys(videoSecondMap),
     ...Object.keys(audioMap),
     ...Object.keys(audioCompletionMap),
     ...Object.keys(billingModeMap),
@@ -236,6 +251,7 @@ export const buildModelSnapshots = ({
     const createCache = createCacheMap[name]?.toString() || ''
     const completion = completionMap[name]?.toString() || ''
     const image = imageMap[name]?.toString() || ''
+    const videoSecond = videoSecondMap[name]?.toString() || ''
     const audio = audioMap[name]?.toString() || ''
     const audioCompletion = audioCompletionMap[name]?.toString() || ''
 
@@ -255,6 +271,7 @@ export const buildModelSnapshots = ({
         createCacheRatio: createCache,
         completionRatio: completion,
         imageRatio: image,
+        videoSecondPrice: videoSecond,
         audioRatio: audio,
         audioCompletionRatio: audioCompletion,
         hasConflict: false,
@@ -269,18 +286,21 @@ export const buildModelSnapshots = ({
       createCacheRatio: createCache,
       completionRatio: completion,
       imageRatio: image,
+      videoSecondPrice: videoSecond,
       audioRatio: audio,
       audioCompletionRatio: audioCompletion,
       billingMode: price !== '' ? 'per-request' : 'per-token',
+      // 按秒计费与按次单价并存属于误配：两者都定义了「一次调用多少钱」
       hasConflict:
-        price !== '' &&
-        (ratio !== '' ||
-          completion !== '' ||
-          cache !== '' ||
-          createCache !== '' ||
-          image !== '' ||
-          audio !== '' ||
-          audioCompletion !== ''),
+        (price !== '' &&
+          (ratio !== '' ||
+            completion !== '' ||
+            cache !== '' ||
+            createCache !== '' ||
+            image !== '' ||
+            audio !== '' ||
+            audioCompletion !== '')) ||
+        (videoSecond !== '' && price !== ''),
     }
   })
 }
@@ -294,6 +314,7 @@ export const getSnapshotSignature = (snapshot?: ModelPricingSnapshot) => {
     createCacheRatio: snapshot.createCacheRatio || '',
     completionRatio: snapshot.completionRatio || '',
     imageRatio: snapshot.imageRatio || '',
+    videoSecondPrice: snapshot.videoSecondPrice || '',
     audioRatio: snapshot.audioRatio || '',
     audioCompletionRatio: snapshot.audioCompletionRatio || '',
     billingMode: snapshot.billingMode || 'per-token',

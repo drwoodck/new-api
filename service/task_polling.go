@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"sort"
 	"strings"
@@ -646,6 +647,11 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按次计费，跳过差额结算", task.TaskID))
 		return
 	}
+
+	// 0.5 按秒计费：以实际时长为计费基准，优先于 adaptor 钩子与 token 回退
+	if settleVideoSecondBilling(ctx, task, taskResult) {
+		return
+	}
 	// 1. 优先让 adaptor 决定最终额度
 	if actualQuota := adaptor.AdjustBillingOnComplete(task, taskResult); actualQuota > 0 {
 		RecalculateTaskQuota(ctx, task, actualQuota, "adaptor计费调整")
@@ -657,4 +663,62 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 		return
 	}
 	// 3. 无调整，保持预扣额度
+}
+
+// settleVideoSecondBilling 按秒计费的实际时长结算。
+// 返回 true 表示该任务走按秒计费，调用方不应再执行 adaptor/token 结算路径
+// （时长才是计费基准，token 数与之无关）。
+//
+// 公式与提交时保持一致：
+//
+//	quota = 每秒单价 × QuotaPerUnit × 分组倍率 × 实际时长 × 其他倍率（分辨率等）
+func settleVideoSecondBilling(ctx context.Context, task *model.Task, taskResult *relaycommon.TaskInfo) bool {
+	bc := task.PrivateData.BillingContext
+	if bc == nil || bc.SecondPrice <= 0 {
+		return false
+	}
+
+	// 上游未返回实际时长：预扣所用的请求时长即为最终时长，无需调整
+	if taskResult == nil || taskResult.DurationSeconds <= 0 {
+		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按秒计费，上游未返回实际时长，保持按请求时长计费", task.TaskID))
+		return true
+	}
+
+	actualSeconds := float64(taskResult.DurationSeconds)
+	if actualSeconds > relaycommon.MaxTaskDurationSeconds {
+		actualSeconds = relaycommon.MaxTaskDurationSeconds
+	}
+	if billedSeconds := bc.OtherRatios["seconds"]; billedSeconds == actualSeconds {
+		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按秒计费，实际时长与预扣一致（%.0f 秒）", task.TaskID, actualSeconds))
+		return true
+	}
+
+	// 除 seconds 外的其他倍率（分辨率等）保持提交时的取值。
+	// OtherRatios 来自数据库 JSON，可能含 NaN/Inf 等脏数据；
+	// 这里的有效性判断与 PriceData 的一致（NaN 无法通过 ratio > 0）。
+	otherMultiplier := 1.0
+	for key, ratio := range bc.OtherRatios {
+		if key == "seconds" {
+			continue
+		}
+		if !(ratio > 0) || math.IsInf(ratio, 1) {
+			continue
+		}
+		otherMultiplier *= ratio
+	}
+
+	baseQuota := bc.SecondPrice * common.QuotaPerUnit * bc.GroupRatio
+	actualQuota, clamp := common.QuotaFromFloatChecked(baseQuota * actualSeconds * otherMultiplier)
+
+	// 把 seconds 更新为实际时长：RecalculateTaskQuota 会经 taskBillingOther 把
+	// OtherRatios 写进结算日志，必须与真正扣费的口径一致，否则对账时
+	// 日志显示的时长与扣费金额对不上。仅改内存，不回写 private_data。
+	if bc.OtherRatios == nil {
+		bc.OtherRatios = make(map[string]float64, 1)
+	}
+	bc.OtherRatios["seconds"] = actualSeconds
+
+	RecalculateTaskQuota(ctx, task, actualQuota,
+		fmt.Sprintf("按秒计费实际时长结算（%.0f 秒 × $%g/秒）", actualSeconds, bc.SecondPrice), clamp)
+	return true
 }

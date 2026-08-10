@@ -54,6 +54,7 @@ type ModelFormValues = {
   CreateCacheRatio: string
   CompletionRatio: string
   ImageRatio: string
+  VideoSecondPrice: string
   AudioRatio: string
   AudioCompletionRatio: string
   ExposeRatioEnabled: boolean
@@ -78,6 +79,7 @@ type ModelJsonFieldName =
   | 'CreateCacheRatio'
   | 'CompletionRatio'
   | 'ImageRatio'
+  | 'VideoSecondPrice'
   | 'AudioRatio'
   | 'AudioCompletionRatio'
 
@@ -118,6 +120,12 @@ const modelJsonFields: Array<{
     name: 'ImageRatio',
     labelKey: 'Image ratio',
     descriptionKey: 'Configure per-model ratio for image inputs or outputs.',
+  },
+  {
+    name: 'VideoSecondPrice',
+    labelKey: 'Video per-second price',
+    descriptionKey:
+      'JSON map of video model → USD cost per second. Configured models are billed by duration and settled against the actual video length.',
   },
   {
     name: 'AudioRatio',
@@ -271,6 +279,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               savedCreateCacheRatio={savedValues.CreateCacheRatio}
               savedCompletionRatio={savedValues.CompletionRatio}
               savedImageRatio={savedValues.ImageRatio}
+              savedVideoSecondPrice={savedValues.VideoSecondPrice}
               savedAudioRatio={savedValues.AudioRatio}
               savedAudioCompletionRatio={savedValues.AudioCompletionRatio}
               savedBillingMode={savedValues.BillingMode}
@@ -281,6 +290,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               createCacheRatio={form.watch('CreateCacheRatio')}
               completionRatio={form.watch('CompletionRatio')}
               imageRatio={form.watch('ImageRatio')}
+              videoSecondPrice={form.watch('VideoSecondPrice')}
               audioRatio={form.watch('AudioRatio')}
               audioCompletionRatio={form.watch('AudioCompletionRatio')}
               billingMode={form.watch('BillingMode')}

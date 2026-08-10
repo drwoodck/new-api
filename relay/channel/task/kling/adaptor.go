@@ -357,6 +357,11 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		if videos := resPayload.Data.TaskResult.Videos; len(videos) > 0 {
 			video := videos[0]
 			taskInfo.Url = video.Url
+			// 上游回报的实际时长用于按秒计费的差额结算。
+			// 可能返回 "5" 或 "5.1"，向上取整避免少计费。
+			if seconds, err := strconv.ParseFloat(video.Duration, 64); err == nil && seconds > 0 {
+				taskInfo.DurationSeconds = int(math.Ceil(seconds))
+			}
 		}
 		if tokens, err := strconv.ParseFloat(resPayload.Data.FinalUnitDeduction, 64); err == nil {
 			// 上游返回的扣费数值，饱和转换防止超大数值回绕成负数

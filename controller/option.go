@@ -26,6 +26,7 @@ var completionRatioMetaOptionKeys = []string{
 	"CacheRatio",
 	"CreateCacheRatio",
 	"ImageRatio",
+	"VideoSecondPrice",
 	"AudioRatio",
 	"AudioCompletionRatio",
 }
@@ -269,6 +270,15 @@ func UpdateOption(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "图片倍率设置失败: " + err.Error(),
+			})
+			return
+		}
+	case "VideoSecondPrice":
+		err = ratio_setting.UpdateVideoSecondPriceByJSONString(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "视频按秒计费设置失败: " + err.Error(),
 			})
 			return
 		}

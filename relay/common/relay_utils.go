@@ -145,6 +145,85 @@ func validatePrompt(prompt string) *dto.TaskError {
 // overflow quota calculation into a negative charge.
 const MaxTaskDurationSeconds = 3600
 
+// defaultVideoDurationByChannel mirrors each video adaptor's own fallback so
+// per-second billing charges the same duration the upstream will actually
+// generate when the user omits the field.
+// ChannelTypeOpenAI 也在表内：OpenAI 兼容的第三方中转站按 OpenAI 类型接入，
+// 但走的是 Sora 适配器，默认时长必须与 Sora 一致。
+var defaultVideoDurationByChannel = map[int]int{
+	constant.ChannelTypeSora:        4,
+	constant.ChannelTypeOpenAI:      4,
+	constant.ChannelTypeGemini:      8,
+	constant.ChannelTypeVertexAi:    8,
+	constant.ChannelTypeKling:       5,
+	constant.ChannelTypeVidu:        5,
+	constant.ChannelTypeJimeng:      5,
+	constant.ChannelTypeMiniMax:     6,
+	constant.ChannelTypeAli:         5,
+	constant.ChannelTypeDoubaoVideo: 5,
+	constant.ChannelTypeVolcEngine:  5,
+}
+
+// DefaultVideoDurationSeconds returns the adaptor fallback duration for a
+// channel type, or 5 when the channel has no specific default.
+func DefaultVideoDurationSeconds(channelType int) int {
+	if d, ok := defaultVideoDurationByChannel[channelType]; ok {
+		return d
+	}
+	return 5
+}
+
+// ResolveTaskVideoDuration determines the billable duration in seconds for a
+// video task request. Priority: duration > seconds > metadata > channel default.
+// The result is clamped to MaxTaskDurationSeconds because it is used directly
+// as a billing multiplier and metadata bypasses standard request validation.
+func ResolveTaskVideoDuration(c *gin.Context, channelType int) int {
+	fallback := DefaultVideoDurationSeconds(channelType)
+	req, err := GetTaskRequest(c)
+	if err != nil {
+		return fallback
+	}
+	if req.Duration > 0 {
+		return min(req.Duration, MaxTaskDurationSeconds)
+	}
+	if seconds, convErr := strconv.Atoi(req.Seconds); convErr == nil && seconds > 0 {
+		return min(seconds, MaxTaskDurationSeconds)
+	}
+	if seconds := durationFromMetadata(req.Metadata); seconds > 0 {
+		return min(seconds, MaxTaskDurationSeconds)
+	}
+	return fallback
+}
+
+// durationFromMetadata reads a duration hint from request metadata.
+// Different upstreams spell it differently, so both keys are accepted.
+func durationFromMetadata(metadata map[string]interface{}) int {
+	if metadata == nil {
+		return 0
+	}
+	for _, key := range []string{"durationSeconds", "duration"} {
+		value, ok := metadata[key]
+		if !ok {
+			continue
+		}
+		switch n := value.(type) {
+		case float64:
+			if int(n) > 0 {
+				return int(n)
+			}
+		case int:
+			if n > 0 {
+				return n
+			}
+		case string:
+			if parsed, err := strconv.Atoi(n); err == nil && parsed > 0 {
+				return parsed
+			}
+		}
+	}
+	return 0
+}
+
 func validateTaskDurationBounds(req TaskSubmitReq) *dto.TaskError {
 	seconds := req.Duration
 	if seconds == 0 && req.Seconds != "" {

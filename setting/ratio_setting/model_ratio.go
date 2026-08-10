@@ -342,6 +342,7 @@ func InitRatioSettings() {
 	imageRatioMap.AddAll(defaultImageRatio)
 	audioRatioMap.AddAll(defaultAudioRatio)
 	audioCompletionRatioMap.AddAll(defaultAudioCompletionRatio)
+	videoSecondPriceMap.AddAll(defaultVideoSecondPrice)
 }
 
 func GetModelPriceMap() map[string]float64 {
@@ -659,6 +660,11 @@ var imageRatioMap = types.NewRWMap[string, float64]()
 var audioRatioMap = types.NewRWMap[string, float64]()
 var audioCompletionRatioMap = types.NewRWMap[string, float64]()
 
+// defaultVideoSecondPrice 故意留空：非空默认值会在升级时把存量视频模型
+// 静默切换为按秒计费，造成账单变化。按秒计费必须由管理员显式配置后生效。
+var defaultVideoSecondPrice = map[string]float64{}
+var videoSecondPriceMap = types.NewRWMap[string, float64]()
+
 func ImageRatio2JSONString() string {
 	return imageRatioMap.MarshalJSONString()
 }
@@ -673,6 +679,30 @@ func GetImageRatio(name string) (float64, bool) {
 		return 1, false // Default to 1 if not found
 	}
 	return ratio, true
+}
+
+func VideoSecondPrice2JSONString() string {
+	return videoSecondPriceMap.MarshalJSONString()
+}
+
+func UpdateVideoSecondPriceByJSONString(jsonStr string) error {
+	return types.LoadFromJsonStringWithCallback(videoSecondPriceMap, jsonStr, InvalidateExposedDataCache)
+}
+
+// GetVideoSecondPrice 返回视频模型的每秒单价（美元/秒）。
+// 第二个返回值为 false 表示该模型未配置按秒计费，调用方应保持原有按次计费逻辑。
+// 单价为 0 或负数视为未配置，避免误把付费模型变成免费。
+func GetVideoSecondPrice(name string) (float64, bool) {
+	name = FormatMatchingModelName(name)
+	price, ok := videoSecondPriceMap.Get(name)
+	if !ok || price <= 0 {
+		return 0, false
+	}
+	return price, true
+}
+
+func GetVideoSecondPriceCopy() map[string]float64 {
+	return videoSecondPriceMap.ReadAll()
 }
 
 func AudioRatio2JSONString() string {

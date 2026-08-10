@@ -590,13 +590,18 @@ func RelayTask(c *gin.Context) {
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
 		task.PrivateData.TokenId = relayInfo.TokenId
 		task.PrivateData.NodeName = common.NodeName
+		// 按秒计费虽然走 UsePrice，但必须参与轮询阶段的差额结算，
+		// 因此不能标记为 PerCallBilling（否则实际时长不同也不会退补）。
+		perSecondBilling := relayInfo.PriceData.VideoSecondPrice > 0
 		task.PrivateData.BillingContext = &model.TaskBillingContext{
 			ModelPrice:      relayInfo.PriceData.ModelPrice,
 			GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
 			ModelRatio:      relayInfo.PriceData.ModelRatio,
 			OtherRatios:     relayInfo.PriceData.OtherRatios(),
 			OriginModelName: relayInfo.OriginModelName,
-			PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
+			PerCallBilling: !perSecondBilling &&
+				(common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice),
+			SecondPrice: relayInfo.PriceData.VideoSecondPrice,
 		}
 		task.Quota = result.Quota
 		task.Data = result.TaskData
