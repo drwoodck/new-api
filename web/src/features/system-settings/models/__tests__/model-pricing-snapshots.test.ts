@@ -19,7 +19,25 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { isBasePricingUnset } from '../model-pricing-snapshots'
+import {
+  buildModelSnapshots,
+  getModeLabel,
+  isBasePricingUnset,
+} from '../model-pricing-snapshots'
+
+const emptyMaps = {
+  modelPrice: '{}',
+  modelRatio: '{}',
+  cacheRatio: '{}',
+  createCacheRatio: '{}',
+  completionRatio: '{}',
+  imageRatio: '{}',
+  videoSecondPrice: '{}',
+  audioRatio: '{}',
+  audioCompletionRatio: '{}',
+  billingMode: '{}',
+  billingExpr: '{}',
+}
 
 describe('isBasePricingUnset', () => {
   test('treats a model with only a video per-second price as configured', () => {
@@ -70,5 +88,61 @@ describe('isBasePricingUnset', () => {
 
   test('treats a missing snapshot as unset', () => {
     assert.equal(isBasePricingUnset(undefined), true)
+  })
+})
+
+describe('buildModelSnapshots billing mode classification', () => {
+  test('classifies a video per-second price as per-second, not per-token', () => {
+    // Regression: billingMode was derived only from `price`, so a model with
+    // just a per-second price fell through to 'per-token' and the pricing
+    // table showed the wrong mode badge.
+    const [row] = buildModelSnapshots({
+      ...emptyMaps,
+      videoSecondPrice: '{"sora-2":0.1}',
+    })
+
+    assert.equal(row.name, 'sora-2')
+    assert.equal(row.billingMode, 'per-second')
+    assert.equal(getModeLabel(row.billingMode), 'Per-second')
+  })
+
+  test('per-second takes precedence over a fixed price and flags a conflict', () => {
+    const [row] = buildModelSnapshots({
+      ...emptyMaps,
+      modelPrice: '{"sora-2":0.5}',
+      videoSecondPrice: '{"sora-2":0.1}',
+    })
+
+    assert.equal(row.billingMode, 'per-second')
+    assert.equal(row.hasConflict, true)
+  })
+
+  test('still classifies a fixed price as per-request', () => {
+    const [row] = buildModelSnapshots({
+      ...emptyMaps,
+      modelPrice: '{"gpt-image-1":0.02}',
+    })
+
+    assert.equal(row.billingMode, 'per-request')
+  })
+
+  test('still classifies a ratio-only model as per-token', () => {
+    const [row] = buildModelSnapshots({
+      ...emptyMaps,
+      modelRatio: '{"gpt-4":15}',
+    })
+
+    assert.equal(row.billingMode, 'per-token')
+  })
+
+  test('tiered_expr wins over a per-second price', () => {
+    const [row] = buildModelSnapshots({
+      ...emptyMaps,
+      videoSecondPrice: '{"veo-3":0.4}',
+      billingMode: '{"veo-3":"tiered_expr"}',
+      billingExpr: '{"veo-3":"tier(\\"base\\", p * 2)"}',
+    })
+
+    assert.equal(row.billingMode, 'tiered_expr')
   })
 })

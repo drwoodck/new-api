@@ -85,16 +85,27 @@ const ratioToPrice = (ratio?: string, denominator?: string) => {
 
 export const getModeLabel = (mode?: string) => {
   if (mode === 'per-request') return 'Per-request'
+  if (mode === 'per-second') return 'Per-second'
   if (mode === 'tiered_expr') return 'Expression'
   return 'Per-token'
 }
 
 export const getModeVariant = (
   mode?: string
-): 'warning' | 'info' | 'success' => {
+): 'warning' | 'info' | 'success' | 'purple' => {
   if (mode === 'per-request') return 'warning'
+  if (mode === 'per-second') return 'purple'
   if (mode === 'tiered_expr') return 'info'
   return 'success'
+}
+
+// classifyBillingMode 决定非 tiered_expr 模型的计费模式。
+// 按秒单价优先于按次单价：后端 GetVideoSecondPrice 命中时会直接返回，
+// 忽略 price/ratio，前端展示必须与之一致。
+const classifyBillingMode = (videoSecondPrice: string, price: string) => {
+  if (videoSecondPrice !== '') return 'per-second'
+  if (price !== '') return 'per-request'
+  return 'per-token'
 }
 
 const getExpressionSummary = (
@@ -290,7 +301,7 @@ export const buildModelSnapshots = ({
       videoSecondPrice: videoSecond,
       audioRatio: audio,
       audioCompletionRatio: audioCompletion,
-      billingMode: price !== '' ? 'per-request' : 'per-token',
+      billingMode: classifyBillingMode(videoSecond, price),
       // 按秒计费与按次单价并存属于误配：两者都定义了「一次调用多少钱」
       hasConflict:
         (price !== '' &&

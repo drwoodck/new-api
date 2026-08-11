@@ -93,6 +93,16 @@ type ModelPricingSheetProps = {
   isSaving?: boolean
 }
 
+// resolveEditorPricingMode 决定编辑器打开时定位到哪个计费模式 tab。
+// 顺序与 buildModelSnapshots 的分类逻辑保持一致，否则按秒计费的模型会
+// 落到错误的 tab，导致每秒单价输入框不可见。
+const resolveEditorPricingMode = (data: ModelRatioData): PricingMode => {
+  if (data.billingMode === 'tiered_expr') return 'tiered_expr'
+  if (data.videoSecondPrice) return 'per-second'
+  if (data.price) return 'per-request'
+  return 'per-token'
+}
+
 type ModelPricingEditorPanelProps = Omit<
   ModelPricingSheetProps,
   'open' | 'onOpenChange'
@@ -190,13 +200,7 @@ export const ModelPricingEditorPanel = forwardRef<
         audioRatio: editData.audioRatio || '',
         audioCompletionRatio: editData.audioCompletionRatio || '',
       })
-      setPricingMode(
-        editData.billingMode === 'tiered_expr'
-          ? 'tiered_expr'
-          : editData.price
-            ? 'per-request'
-            : 'per-token'
-      )
+      setPricingMode(resolveEditorPricingMode(editData))
       setBillingExpr(editData.billingExpr || '')
       setRequestRuleExpr(editData.requestRuleExpr || '')
     } else {
@@ -557,12 +561,15 @@ export const ModelPricingEditorPanel = forwardRef<
                   onValueChange={handleModeChange}
                   className='gap-4'
                 >
-                  <TabsList className='grid w-full grid-cols-3'>
+                  <TabsList className='grid w-full grid-cols-4'>
                     <TabsTrigger value='per-token'>
                       {t('Per-token')}
                     </TabsTrigger>
                     <TabsTrigger value='per-request'>
                       {t('Per-request')}
+                    </TabsTrigger>
+                    <TabsTrigger value='per-second'>
+                      {t('Per-second')}
                     </TabsTrigger>
                     <TabsTrigger value='tiered_expr'>
                       {t('Expression')}
@@ -649,7 +656,11 @@ export const ModelPricingEditorPanel = forwardRef<
                           </FormItem>
                         )}
                       />
+                    </FieldGroup>
+                  </TabsContent>
 
+                  <TabsContent value='per-second' className='pt-0'>
+                    <FieldGroup className='gap-5'>
                       <FormField
                         control={form.control}
                         name='videoSecondPrice'
