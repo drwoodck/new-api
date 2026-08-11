@@ -67,7 +67,8 @@ export const isBasePricingUnset = (snapshot?: ModelPricingSnapshot) =>
   !snapshot ||
   (snapshot.billingMode !== 'tiered_expr' &&
     !hasPricingValue(snapshot.price) &&
-    !hasPricingValue(snapshot.ratio))
+    !hasPricingValue(snapshot.ratio) &&
+    !hasPricingValue(snapshot.videoSecondPrice))
 
 const toNumberOrNull = (value?: string) => {
   if (!hasPricingValue(value)) return null
