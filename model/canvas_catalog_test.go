@@ -31,6 +31,8 @@ func TestCanvasCatalogInsert(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotZero(t, c.Id)
 	assert.NotZero(t, c.CreatedTime)
+	assert.NotZero(t, c.UpdatedTime)
+	assert.Equal(t, c.CreatedTime, c.UpdatedTime)
 }
 
 func TestGetCanvasCatalog(t *testing.T) {

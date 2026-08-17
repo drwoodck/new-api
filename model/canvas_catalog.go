@@ -49,6 +49,8 @@ func GetCanvasCatalog(groupFilter []string) ([]CanvasCatalogModel, int64, error)
 	}
 	// catalog_version = count of all rows (enabled + disabled) as monotonic proxy
 	var totalCount int64
-	DB.Model(&CanvasCatalogModel{}).Count(&totalCount)
+	if err := DB.Model(&CanvasCatalogModel{}).Count(&totalCount).Error; err != nil {
+		return nil, 0, err
+	}
 	return models, totalCount, nil
 }
