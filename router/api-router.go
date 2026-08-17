@@ -248,6 +248,12 @@ func SetApiRouter(router *gin.Engine) {
 			tokenRoute.POST("/batch/keys", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.GetTokenKeysBatch)
 		}
 
+		canvasRoute := apiRouter.Group("/canvas")
+		canvasRoute.Use(middleware.TokenAuthReadOnly())
+		{
+			canvasRoute.GET("/catalog", controller.GetCanvasCatalog)
+		}
+
 		usageRoute := apiRouter.Group("/usage")
 		usageRoute.Use(middleware.CORS(), middleware.CriticalRateLimit())
 		{
