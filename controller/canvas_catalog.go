@@ -34,7 +34,11 @@ func GetCanvasCatalog(c *gin.Context) {
 		"models": models,
 	}
 
-	bodyBytes, _ := json.Marshal(response)
+	bodyBytes, err := json.Marshal(response)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "failed to encode catalog: " + err.Error()})
+		return
+	}
 	etag := fmt.Sprintf(`"%x"`, md5.Sum(bodyBytes))
 
 	if c.GetHeader("If-None-Match") == etag {

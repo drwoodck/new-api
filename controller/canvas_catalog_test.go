@@ -69,3 +69,30 @@ func TestGetCatalogETag304(t *testing.T) {
 	assert.Equal(t, http.StatusNotModified, w2.Code)
 	assert.Empty(t, w2.Body.Bytes())
 }
+
+func TestGetCatalogWithModels(t *testing.T) {
+	router := setupCatalogTestDB(t)
+
+	// Insert a test model
+	model.DB.Create(&model.CanvasCatalogModel{
+		RemoteID:    "test-model-1",
+		DisplayName: "Test Model 1",
+		Capabilities: "text,chat",
+		Enabled:     true,
+		Contract:    "standard",
+		SortOrder:   0,
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/canvas/catalog", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp catalogResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, 1, resp.CatalogVersion)
+	assert.Equal(t, "0.1.17", resp.MinClient)
+	assert.Equal(t, 1, len(resp.Models))
+	assert.Equal(t, "test-model-1", resp.Models[0].RemoteID)
+	assert.Equal(t, "Test Model 1", resp.Models[0].DisplayName)
+}
