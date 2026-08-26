@@ -35,6 +35,24 @@ func TestCanvasCatalogInsert(t *testing.T) {
 	assert.Equal(t, c.CreatedTime, c.UpdatedTime)
 }
 
+// TestCanvasCatalogUpdateWritesZeroValues 锁住 GORM"结构体形式 Updates 跳过零值字段"
+// 的坑:Enabled 从 true 改为 false 必须真正落到数据库,而不是被静默忽略。
+func TestCanvasCatalogUpdateWritesZeroValues(t *testing.T) {
+	setupCanvasCatalogTestDB(t)
+	c := &CanvasCatalogModel{
+		RemoteID: "toggle-me", DisplayName: "Toggle Me", Capabilities: "video_gen",
+		Enabled: true, Contract: "relay_video_async_v1", RequiresVocab: 1,
+	}
+	require.NoError(t, c.Insert())
+
+	c.Enabled = false
+	require.NoError(t, c.Update())
+
+	reloaded, err := GetCanvasCatalogModelByID(c.Id)
+	require.NoError(t, err)
+	assert.False(t, reloaded.Enabled, "Enabled=false must persist, not be skipped as a zero value")
+}
+
 func TestGetCanvasCatalog(t *testing.T) {
 	setupCanvasCatalogTestDB(t)
 

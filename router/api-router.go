@@ -254,6 +254,16 @@ func SetApiRouter(router *gin.Engine) {
 			canvasRoute.GET("/catalog", controller.GetCanvasCatalog)
 		}
 
+		canvasAdminRoute := apiRouter.Group("/canvas/admin")
+		canvasAdminRoute.Use(middleware.AdminAuth())
+		{
+			canvasAdminRoute.GET("/models", controller.GetAllCanvasCatalogModelsAdmin)
+			canvasAdminRoute.GET("/models/:id", controller.GetCanvasCatalogModelAdmin)
+			canvasAdminRoute.POST("/models", controller.CreateCanvasCatalogModelAdmin)
+			canvasAdminRoute.PUT("/models", controller.UpdateCanvasCatalogModelAdmin)
+			canvasAdminRoute.DELETE("/models/:id", controller.DeleteCanvasCatalogModelAdmin)
+		}
+
 		usageRoute := apiRouter.Group("/usage")
 		usageRoute.Use(middleware.CORS(), middleware.CriticalRateLimit())
 		{

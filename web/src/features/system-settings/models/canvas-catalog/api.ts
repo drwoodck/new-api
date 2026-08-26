@@ -1,0 +1,55 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import { api } from '@/lib/api'
+
+import type { CanvasCatalogModel } from './types'
+
+interface ApiResponse<T = unknown> {
+  success: boolean
+  message?: string
+  data?: T
+}
+
+export async function getCanvasCatalogModels(): Promise<
+  ApiResponse<CanvasCatalogModel[]>
+> {
+  const res = await api.get('/api/canvas/admin/models')
+  return res.data
+}
+
+export async function createCanvasCatalogModel(
+  data: Omit<CanvasCatalogModel, 'id'>
+): Promise<ApiResponse<CanvasCatalogModel>> {
+  const res = await api.post('/api/canvas/admin/models', data)
+  return res.data
+}
+
+export async function updateCanvasCatalogModel(
+  data: CanvasCatalogModel
+): Promise<ApiResponse<CanvasCatalogModel>> {
+  const res = await api.put('/api/canvas/admin/models', data)
+  return res.data
+}
+
+export async function deleteCanvasCatalogModel(
+  id: number
+): Promise<ApiResponse> {
+  const res = await api.delete(`/api/canvas/admin/models/${id}`)
+  return res.data
+}
