@@ -52,8 +52,11 @@ func DeleteCanvasCatalogModel(id int) error {
 
 func GetCanvasCatalog(groupFilter []string) ([]CanvasCatalogModel, int64, error) {
 	var models []CanvasCatalogModel
-	// Phase 1: ignore group filter, return all enabled models sorted by SortOrder
-	err := DB.Where("enabled = ?", true).Order("sort_order ASC, display_name ASC").Find(&models).Error
+	// Phase 1: ignore group filter, return ALL entries sorted by SortOrder。
+	// 契约要求不得在服务端过滤停用项:客户端靠"条目还在目录但 enabled=false"
+	// 做软下线(保留行、置 0、不可新发起),过滤掉停用项会让客户端无法区分
+	// "停用"与"已删除"。
+	err := DB.Order("sort_order ASC, display_name ASC").Find(&models).Error
 	if err != nil {
 		return nil, 0, err
 	}

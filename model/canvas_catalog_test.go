@@ -68,7 +68,11 @@ func TestGetCanvasCatalog(t *testing.T) {
 	result, version, err := GetCanvasCatalog(nil)
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), version) // total count including disabled
-	assert.Len(t, result, 2) // only enabled
+	// 契约要求返回全部条目(含禁用):客户端要靠 enabled=false 做软下线,
+	// 服务端过滤停用项会让客户端无法区分"停用"与"已删除"。
+	assert.Len(t, result, 3)
 	assert.Equal(t, "m3", result[0].RemoteID) // sorted by SortOrder
 	assert.Equal(t, "m1", result[1].RemoteID)
+	assert.Equal(t, "m2", result[2].RemoteID)
+	assert.False(t, result[2].Enabled)
 }
