@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 )
@@ -31,6 +33,22 @@ type canvasCatalogWireModel struct {
 	ParamSchema    json.RawMessage `json:"param_schema"`
 	SchemaOverride *string         `json:"schema_override"`
 	RequiresVocab  int             `json:"requires_vocab"`
+
+	// GroupVisible 表示该条目是否在调用者分组的可用模型集里(派生自 abilities,
+	// 不是目录自己的列)。
+	//
+	// 为什么是独立字段、而不是复用 Enabled:画布把 Enabled 直接写进本地
+	// models.enabled 列(sync/catalog.rs 的 apply_entry),而那一列**同时**是
+	// 用户自己的模型勾选开关(ProviderDetailPanel 的启用/停用),且冲突时
+	// 无条件覆写(model_repo.rs 的 `enabled = excluded.enabled`)。从目录侧
+	// 写 Enabled 表达「分组不可见」,会在每次同步静默清掉用户的选择。
+	//
+	// 也不能用「从响应里删掉行」来表达:客户端靠「条目还在但 enabled=false」
+	// 区分「已下线」与「已删除」,删行会让这个区分消失。
+	//
+	// 画布当前还不读这个字段 —— serde 忽略未知字段,所以下发它是向后兼容的,
+	// 消费留给后续任务。
+	GroupVisible bool `json:"group_visible"`
 }
 
 // parseCapabilities 兼容管理员在文本框里的几种写法:JSON 数组
@@ -62,7 +80,11 @@ func parseCapabilities(raw string) []string {
 	return out
 }
 
-func toWireModel(m *model.CanvasCatalogModel) canvasCatalogWireModel {
+// toWireModel 把存储格式转成客户端契约格式。
+//
+// groupModels 是调用者分组的可用模型集(nil 表示「不做分组判定」——
+// 取不到有效分组时一律按可见处理,宁可多给也不要把整份目录判成不可见)。
+func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}) canvasCatalogWireModel {
 	w := canvasCatalogWireModel{
 		RemoteID:      m.RemoteID,
 		DisplayName:   m.DisplayName,
@@ -70,6 +92,11 @@ func toWireModel(m *model.CanvasCatalogModel) canvasCatalogWireModel {
 		Enabled:       m.Enabled,
 		Contract:      m.Contract,
 		RequiresVocab: m.RequiresVocab,
+		// nil 集合 = 无分组信息 = 不降级任何条目
+		GroupVisible: groupModels == nil,
+	}
+	if groupModels != nil {
+		_, w.GroupVisible = groupModels[m.RemoteID]
 	}
 	if m.Description != "" {
 		w.Description = &m.Description
@@ -94,7 +121,25 @@ func toWireModel(m *model.CanvasCatalogModel) canvasCatalogWireModel {
 }
 
 func GetCanvasCatalog(c *gin.Context) {
-	rows, version, err := model.GetCanvasCatalog(nil)
+	// TokenAuthReadOnly 已经算好并写入了有效分组(token.Group 覆盖 userCache.Group,
+	// 与完整 TokenAuth 同一优先级),这里直接读,不重新查库。
+	effectiveGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+
+	// groupModels 为 nil 表示取不到有效分组 —— 此时不做任何分组判定,
+	// 全部按可见下发。宁可多给也不要因为读不到分组就把整份目录判成不可见。
+	var groupModels map[string]struct{}
+	if effectiveGroup != "" {
+		// 无缓存的直接 DB 查询,但 abilities 复合主键以 Group 为首列,
+		// distinct 模型集合很小,目录端点当前调用量级下可接受。
+		enabled := model.GetGroupEnabledModels(effectiveGroup)
+		groupModels = make(map[string]struct{}, len(enabled))
+		for _, name := range enabled {
+			groupModels[name] = struct{}{}
+		}
+	}
+
+	// 模型层不参与分组过滤 —— 可见性在下面的 wire 转换里作为独立字段附加。
+	rows, version, err := model.GetCanvasCatalog()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
 		return
@@ -107,7 +152,7 @@ func GetCanvasCatalog(c *gin.Context) {
 
 	models := make([]canvasCatalogWireModel, 0, len(rows))
 	for i := range rows {
-		models = append(models, toWireModel(&rows[i]))
+		models = append(models, toWireModel(&rows[i], groupModels))
 	}
 
 	response := gin.H{
