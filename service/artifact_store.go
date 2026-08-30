@@ -77,9 +77,12 @@ func ArtifactPathFor(taskID string, contentType string) (relPath string, absPath
 		return "", "", err
 	}
 
+	// 取**末尾**两个字符分片,不是开头。GenerateTaskID 返回 "task_" + 随机串
+	// (model/task.go),所以开头两个字符恒为 "ta" —— 按前缀分片会把每一个产物
+	// 都堆进同一个目录,正是分片要避免的情况。末尾字符来自随机部分,分布均匀。
 	shard := "00"
 	if len(seg) >= 2 {
-		shard = strings.ToLower(seg[:2])
+		shard = strings.ToLower(seg[len(seg)-2:])
 	}
 
 	relPath = filepath.Join(shard, seg+extForContentType(contentType))

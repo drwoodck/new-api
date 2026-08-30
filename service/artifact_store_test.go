@@ -53,6 +53,41 @@ func TestArtifactPathShardsIntoSubdirectories(t *testing.T) {
 	}
 }
 
+// 分片必须真的把**生产形状**的 taskID 分散开。
+//
+// 这个测试存在的理由:上一版按 seg[:2] 取前缀分片,而 GenerateTaskID 返回的是
+// "task_" + 随机串,前两个字符恒为 "ta" —— 于是每个产物都进同一个目录,
+// 分片完全失效。而原来那个测试只断言「路径里有分隔符」,照样通过。
+// 用真实前缀的 ID 才能暴露这类问题。
+func TestArtifactPathShardsSpreadRealTaskIDs(t *testing.T) {
+	// 与 model.GenerateTaskID() 同构:固定前缀 + 变化的随机尾部
+	ids := []string{
+		"task_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa01",
+		"task_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb27",
+		"task_cccccccccccccccccccccccccccccc93",
+		"task_dddddddddddddddddddddddddddddd4f",
+	}
+
+	shards := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		rel, _, err := ArtifactPathFor(id, "video/mp4")
+		if err != nil {
+			t.Fatalf("taskID %q: %v", id, err)
+		}
+		shard := filepath.Dir(rel)
+		shards[shard] = struct{}{}
+	}
+
+	if len(shards) != len(ids) {
+		got := make([]string, 0, len(shards))
+		for s := range shards {
+			got = append(got, s)
+		}
+		t.Errorf("%d 个不同 taskID 只落到 %d 个分片目录 %v —— 分片对生产形状的 ID 失效了",
+			len(ids), len(shards), got)
+	}
+}
+
 // 写入必须是原子的:下载中途失败不能留下半个文件被代理当成完整产物读出去
 func TestStoreArtifactIsAtomic(t *testing.T) {
 	dir := t.TempDir()

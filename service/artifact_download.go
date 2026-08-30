@@ -38,6 +38,12 @@ func shouldDownloadURL(resultURL string) bool {
 // SSRF 校验、Worker 代理路由与日志遮蔽(service/download.go)。
 // 它自身不设超时,所以调用方(这里)负责包 context。
 func fetchAndStore(ctx context.Context, taskID string, url string) (string, int64, error) {
+	// 先看 context —— 已取消就别发请求了。放在 DoDownloadRequest 之后检查的话,
+	// 一个早已超时的任务仍会打一次上游,白费一次带宽和一个连接。
+	if err := ctx.Err(); err != nil {
+		return "", 0, err
+	}
+
 	resp, err := DoDownloadRequest(url, "artifact-persist")
 	if err != nil {
 		return "", 0, fmt.Errorf("拉取失败: %w", err)
@@ -48,11 +54,9 @@ func fetchAndStore(ctx context.Context, taskID string, url string) (string, int6
 		return "", 0, fmt.Errorf("上游返回 %d", resp.StatusCode)
 	}
 
-	// context 已取消时立刻退出,不浪费带宽
-	select {
-	case <-ctx.Done():
-		return "", 0, ctx.Err()
-	default:
+	// 读 body 之前再看一次 —— 请求往返期间可能已经超时
+	if err := ctx.Err(); err != nil {
+		return "", 0, err
 	}
 
 	contentType := resp.Header.Get("Content-Type")
