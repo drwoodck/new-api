@@ -125,16 +125,37 @@ func GetCanvasCatalog(c *gin.Context) {
 	// 与完整 TokenAuth 同一优先级),这里直接读,不重新查库。
 	effectiveGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 
-	// groupModels 为 nil 表示取不到有效分组 —— 此时不做任何分组判定,
-	// 全部按可见下发。宁可多给也不要因为读不到分组就把整份目录判成不可见。
+	// groupModels 为 nil 表示「没有分组信息」—— 一律按可见下发。
+	//
+	// 三种情况都必须落到 nil(fail-open),而不是空集合:
+	//   1. 取不到有效分组(context key 缺省)
+	//   2. abilities 查询失败 —— **这一条是关键**。查询失败与「该分组确实
+	//      一个模型都不能用」都会得到空结果,但含义相反。判成空集合会让
+	//      每个条目 group_visible=false,而画布把它当「已下线」直接从模型
+	//      下拉里剔掉 —— 一次瞬时 DB 故障就让所有客户端的模型列表变空。
+	//      宁可多给(用户点了在计费层被拦)也不要整体变空。
+	//
+	// 只有查询**成功且返回了非空集合**时才收窄可见性。
 	var groupModels map[string]struct{}
 	if effectiveGroup != "" {
 		// 无缓存的直接 DB 查询,但 abilities 复合主键以 Group 为首列,
 		// distinct 模型集合很小,目录端点当前调用量级下可接受。
-		enabled := model.GetGroupEnabledModels(effectiveGroup)
-		groupModels = make(map[string]struct{}, len(enabled))
-		for _, name := range enabled {
-			groupModels[name] = struct{}{}
+		enabled, err := model.GetGroupEnabledModels(effectiveGroup)
+		switch {
+		case err != nil:
+			common.SysError(fmt.Sprintf(
+				"读取分组 %s 的可用模型失败,本次目录按全部可见下发: %v", effectiveGroup, err))
+		case len(enabled) == 0:
+			// 空结果在查询成功的前提下是真实状态,但同样按可见处理 ——
+			// 分组配置漏了会让用户什么都看不到,而错误方向应当是「看得到、
+			// 点了被计费层拦住并给出明确报错」,不是「模型凭空消失」。
+			common.SysLog(fmt.Sprintf(
+				"分组 %s 在 abilities 里没有任何启用模型,本次目录按全部可见下发", effectiveGroup))
+		default:
+			groupModels = make(map[string]struct{}, len(enabled))
+			for _, name := range enabled {
+				groupModels[name] = struct{}{}
+			}
 		}
 	}
 

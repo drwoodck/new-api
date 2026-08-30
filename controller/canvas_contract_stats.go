@@ -49,7 +49,9 @@ func GetCanvasContractStats(c *gin.Context) {
 
 	common.ApiSuccess(c, contractStatsResponse{
 		OnlineInstalls: online,
-		WindowDays:     windowDays,
-		Contracts:      list,
+		// 回报**实际生效**的窗口,不是传进来的原始值 —— 参数缺省时 windowDays
+		// 是 0,而统计用的是默认 30 天,回 0 等于报一个假值给前端。
+		WindowDays: model.EffectiveReportWindowDays(windowDays),
+		Contracts:  list,
 	})
 }

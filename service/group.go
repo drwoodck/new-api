@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -111,7 +112,14 @@ func GetGroupsEnabledModels(groups []string) []string {
 	seen := make(map[string]struct{})
 	models := make([]string, 0)
 	for _, group := range groups {
-		for _, modelName := range model.GetGroupEnabledModels(group) {
+		enabled, err := model.GetGroupEnabledModels(group)
+		if err != nil {
+			// 保持此前的宽松行为:单个分组查不到就跳过它,不让整个列表失败。
+			// 这个函数服务于「展示某些分组能用什么」,少一个分组比整体报错好。
+			common.SysError(fmt.Sprintf("获取分组 %s 的可用模型失败: %v", group, err))
+			continue
+		}
+		for _, modelName := range enabled {
 			if _, ok := seen[modelName]; !ok {
 				seen[modelName] = struct{}{}
 				models = append(models, modelName)

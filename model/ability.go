@@ -40,11 +40,22 @@ func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 	return abilities, err
 }
 
-func GetGroupEnabledModels(group string) []string {
+// GetGroupEnabledModels 返回该分组已启用的去重模型名。
+//
+// 返回 error 而不是把它吞掉:调用方必须能区分「这个分组确实没有可用模型」
+// 与「查询失败了」。两者都返回空切片,但含义完全相反 ——
+// 目录端点靠这个区分决定是收窄可见性还是放行全部(见 GetCanvasCatalog),
+// 吞掉 error 会让一次瞬时 DB 故障把整份目录判成对所有人不可见。
+func GetGroupEnabledModels(group string) ([]string, error) {
 	var models []string
-	// Find distinct models
-	DB.Table("abilities").Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models)
-	return models
+	err := DB.Table("abilities").
+		Where(commonGroupCol+" = ? and enabled = ?", group, true).
+		Distinct("model").
+		Pluck("model", &models).Error
+	if err != nil {
+		return nil, err
+	}
+	return models, nil
 }
 
 func GetEnabledModels() []string {

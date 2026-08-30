@@ -24,7 +24,12 @@ type ClientContractReport struct {
 	Id int `json:"id" gorm:"primaryKey"`
 
 	// 画布侧生成的随机装机标识,跨重启稳定。唯一索引 —— upsert 的冲突键。
-	InstallID string `json:"install_id" gorm:"type:varchar(64);uniqueIndex;not null"`
+	// 唯一索引是 **(user_id, install_id) 复合**,不是 install_id 单列。
+	// install_id 是画布自己生成的随机值、随请求提交,单列唯一意味着任何
+	// 已认证调用方只要报一个别人的 install_id,就能整行覆盖掉那台装机的记录
+	// (连 user_id 一起改成自己)。加上 user_id 就把 upsert 限制在调用者自己
+	// 的行上。影响面只是上报统计的准确性,但没有理由不关掉。
+	InstallID string `json:"install_id" gorm:"type:varchar(64);uniqueIndex:idx_report_user_install,priority:2;not null"`
 
 	ClientVersion string `json:"client_version" gorm:"type:varchar(32);index"`
 
@@ -36,7 +41,9 @@ type ClientContractReport struct {
 	SchemaVocab int `json:"schema_vocab"`
 
 	// 端点已认证,顺手存下 —— 排查「哪个客户还在用老版本」比只有装机数有用
-	UserId int `json:"user_id" gorm:"index"`
+	// 复合唯一索引的前导列(见 InstallID 的注释)。单独的 index 保留 ——
+	// 排查「哪个客户还在用老版本」要按 user_id 查。
+	UserId int `json:"user_id" gorm:"index;uniqueIndex:idx_report_user_install,priority:1"`
 
 	CreatedTime int64 `json:"created_time" gorm:"bigint"`
 	UpdatedTime int64 `json:"updated_time" gorm:"bigint;index"`
@@ -104,10 +111,13 @@ func (r *ClientContractReport) Upsert() error {
 	}
 	r.UpdatedTime = now
 
+	// 冲突键是 (user_id, install_id) —— 与复合唯一索引一致。
+	// DoUpdates 里**不含 user_id**:它是冲突键的一部分,按定义已经相等,
+	// 而把它列进去等于允许改写行的归属。
 	return DB.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "install_id"}},
+		Columns: []clause.Column{{Name: "user_id"}, {Name: "install_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"client_version", "contracts", "schema_vocab", "user_id", "updated_time",
+			"client_version", "contracts", "schema_vocab", "updated_time",
 		}),
 	}).Create(r).Error
 }
@@ -115,10 +125,18 @@ func (r *ClientContractReport) Upsert() error {
 // windowCutoff 返回「在线」窗口的起始时间戳。
 // 非正的天数回退到默认 —— 否则截断点会算到未来,统计分母变 0。
 func windowCutoff(windowDays int) int64 {
+	return time.Now().AddDate(0, 0, -EffectiveReportWindowDays(windowDays)).Unix()
+}
+
+// EffectiveReportWindowDays 把调用方给的天数归一成实际生效的天数。
+//
+// 导出它是为了让 API 能如实回报自己用的窗口:控制器在参数缺省时传 0,
+// 而实际统计用的是默认 30 天,响应里回 0 就是在报一个假值。
+func EffectiveReportWindowDays(windowDays int) int {
 	if windowDays <= 0 {
-		windowDays = defaultReportWindowDays
+		return defaultReportWindowDays
 	}
-	return time.Now().AddDate(0, 0, -windowDays).Unix()
+	return windowDays
 }
 
 // ContractStat 是单个契约的支持情况

@@ -119,6 +119,35 @@ func TestGetCanvasCatalogMarksGroupVisibilityWithoutTouchingEnabled(t *testing.T
 		"在 vip 的可用集里 —— 已停用与分组可见是两个独立维度")
 }
 
+// TestGetCanvasCatalogEmptyAbilitiesTreatsAllVisible 锁住 fail-open:
+// 分组在 abilities 里查不到任何启用模型时,一律按可见下发。
+//
+// 为什么这条重要:查询失败与「该分组确实一个模型都不能用」都得到空结果,
+// 但含义相反。若判成「全部不可见」,画布会把每个条目当成已下线、直接从
+// 模型下拉里剔掉 —— 一次瞬时 DB 故障或一处漏配的分组,就让所有客户端的
+// 模型列表整体变空。错误方向应当是「看得到、点了被计费层拦住并给出明确
+// 报错」,不是「模型凭空消失」。
+func TestGetCanvasCatalogEmptyAbilitiesTreatsAllVisible(t *testing.T) {
+	router := setupCatalogGroupFilterTestDB(t, "group-with-no-abilities")
+
+	model.DB.Create(&model.CanvasCatalogModel{
+		RemoteID: "some-model", DisplayName: "Some Model", Capabilities: "video_gen",
+		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1,
+	})
+	// 故意不插任何 abilities 行 —— 模拟分组漏配 / 查询拿到空结果
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/canvas/catalog", nil)
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp catalogResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Models, 1)
+	assert.True(t, resp.Models[0].GroupVisible,
+		"分组查不到任何启用模型时必须 fail-open,否则客户端模型列表会整体变空")
+}
+
 // TestGetCanvasCatalogNoGroupContextTreatsAllVisible 取不到有效分组时(context key
 // 缺省)一律按可见下发。宁可多给也不要因为读不到分组就把整份目录判成不可见 ——
 // 那会让所有客户端的模型列表整体变空,是比漏过滤严重得多的故障。
