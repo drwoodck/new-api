@@ -263,6 +263,7 @@ func SetApiRouter(router *gin.Engine) {
 			canvasAdminRoute.POST("/models", controller.CreateCanvasCatalogModelAdmin)
 			canvasAdminRoute.PUT("/models", controller.UpdateCanvasCatalogModelAdmin)
 			canvasAdminRoute.DELETE("/models/:id", controller.DeleteCanvasCatalogModelAdmin)
+			canvasAdminRoute.GET("/contract-stats", controller.GetCanvasContractStats)
 		}
 
 		usageRoute := apiRouter.Group("/usage")
