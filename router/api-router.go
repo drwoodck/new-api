@@ -252,6 +252,7 @@ func SetApiRouter(router *gin.Engine) {
 		canvasRoute.Use(middleware.TokenAuthReadOnly())
 		{
 			canvasRoute.GET("/catalog", controller.GetCanvasCatalog)
+			canvasRoute.POST("/client-contracts", controller.ReportClientContracts)
 		}
 
 		canvasAdminRoute := apiRouter.Group("/canvas/admin")
