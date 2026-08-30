@@ -47,6 +47,8 @@ services:
 #      - USER_SESSION_ISSUANCE_WINDOW_SECONDS=86400  # 不得大于 revoked 保留期 (must not exceed revoked retention)
 #      - USER_SESSION_REVOKED_RETENTION_DAYS=7
 #      - USER_SESSION_HOURLY_ALERT_THRESHOLD=5000  # 仅告警，不做全局拒绝 (alert only; never globally rejects login)
+#      - ARTIFACT_RETENTION_DAYS=10  # 生成产物本地保留天数。Kling/Ali/Doubao 存的是会过期的厂商临时链接，落盘后画布关机很久回来仍能取到产物。设为 0 关闭清理（不推荐，磁盘会涨） (Local retention days for generated artifacts. Kling/Ali/Doubao results are vendor temporary links that expire; persisting them locally lets the canvas fetch results after a long absence. 0 disables cleanup, not recommended, disk usage will grow)
+#      - ARTIFACT_STORAGE_DIR=/data/artifacts  # 产物存储目录。默认在 /data 下，随既有的 ./data:/data 卷持久化。改到卷外的路径会导致容器重建后产物丢失 (Artifact storage directory. Defaults under /data, persisted by the existing ./data:/data volume. Moving it outside the volume will lose artifacts on container recreation)
 #      - SYNC_FREQUENCY=60  # Uncomment if regular database syncing is needed
 #      - GOOGLE_ANALYTICS_ID=G-XXXXXXXXXX  # Google Analytics 的测量 ID (Google Analytics Measurement ID)
 #      - UMAMI_WEBSITE_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx  # Umami 网站 ID (Umami Website ID)
