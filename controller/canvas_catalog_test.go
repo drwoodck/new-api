@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"strings"
+	"fmt"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +19,11 @@ import (
 // catalogResponse 对应画布客户端的契约形状(Rust CatalogResponse):
 // models 必须是 wire DTO(canvasCatalogWireModel),而不是存储层的
 // CanvasCatalogModel —— 客户端要求 capabilities 是数组、param_schema 是对象。
+// boolPtr 是 CanvasCatalogModel.Enabled 变成 *bool 之后的测试辅助。
+// 指针是必需的:该字段带 gorm default:true,bool 零值会被 GORM 当成
+// 「未设置」而写入默认值,导致 enabled=false 根本插不进去。
+func boolPtr(b bool) *bool { return &b }
+
 type catalogResponse struct {
 	CatalogVersion int                       `json:"catalog_version"`
 	MinClient      string                    `json:"min_client"`
@@ -28,8 +35,14 @@ type catalogResponse struct {
 func setupCatalogTestDB(t *testing.T) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			sqlDB.Close()
+		}
+	})
 	model.DB = db
 	require.NoError(t, db.AutoMigrate(&model.CanvasCatalogModel{}))
 
@@ -78,7 +91,7 @@ func TestGetCatalogETag304(t *testing.T) {
 	// 内容变化后,同一客户端必须拿到 200 + 新 ETag,而不是被旧 ETag 钉死在 304
 	model.DB.Create(&model.CanvasCatalogModel{
 		RemoteID: "fresh-model", DisplayName: "Fresh", Capabilities: "video_gen",
-		Enabled: true, Contract: "relay_video_async_v1", RequiresVocab: 1,
+		Enabled: boolPtr(true), Contract: "relay_video_async_v1", RequiresVocab: 1,
 	})
 	w3 := httptest.NewRecorder()
 	req3, _ := http.NewRequest("GET", "/api/canvas/catalog", nil)
@@ -96,7 +109,7 @@ func TestGetCatalogWithModels(t *testing.T) {
 		RemoteID:    "test-model-1",
 		DisplayName: "Test Model 1",
 		Capabilities: "text,chat",
-		Enabled:     true,
+		Enabled:     boolPtr(true),
 		Contract:    "standard",
 		SortOrder:   0,
 	})
@@ -124,7 +137,7 @@ func TestGetCatalogWireFormatContract(t *testing.T) {
 	model.DB.Create(&model.CanvasCatalogModel{
 		RemoteID: "video-a", DisplayName: "Video A",
 		Capabilities: "video_gen,image_gen",
-		Enabled:      true,
+		Enabled:      boolPtr(true),
 		Contract:     "relay_video_async_v1",
 		ParamSchema:  `{"prompt":{"type":"string"},"duration":{"type":"integer"}}`,
 		RequiresVocab: 1,
@@ -132,7 +145,7 @@ func TestGetCatalogWireFormatContract(t *testing.T) {
 	model.DB.Create(&model.CanvasCatalogModel{
 		RemoteID: "video-b", DisplayName: "Video B",
 		Capabilities: `["video_gen"]`, // JSON 数组写法也要兼容
-		Enabled:      false,           // 停用条目必须仍出现在响应中
+		Enabled:      boolPtr(false),           // 停用条目必须仍出现在响应中
 		Contract:     "relay_video_async_v1",
 		SchemaOverride: `{"endpoint_path":"/v1/videos"}`,
 		ParamSchema:    `not-valid-json`, // 非法 JSON → null,不能弄垮响应

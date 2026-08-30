@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"strings"
+	"fmt"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -31,8 +33,14 @@ func setupCatalogGroupFilterTestDB(t *testing.T, effectiveGroup string) *gin.Eng
 	// exact reason, rather than inventing new test infra.
 	initModelListColumnNames(t)
 
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			sqlDB.Close()
+		}
+	})
 	model.DB = db
 	require.NoError(t, db.AutoMigrate(&model.CanvasCatalogModel{}, &model.Ability{}))
 
@@ -63,16 +71,16 @@ func TestGetCanvasCatalogMarksGroupVisibilityWithoutTouchingEnabled(t *testing.T
 
 	model.DB.Create(&model.CanvasCatalogModel{
 		RemoteID: "vip-only", DisplayName: "VIP Only", Capabilities: "video_gen",
-		Enabled: true, Contract: "c1", RequiresVocab: 1, SortOrder: 1,
+		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1, SortOrder: 1,
 	})
 	model.DB.Create(&model.CanvasCatalogModel{
 		RemoteID: "default-only", DisplayName: "Default Only", Capabilities: "video_gen",
-		Enabled: true, Contract: "c1", RequiresVocab: 1, SortOrder: 2,
+		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1, SortOrder: 2,
 	})
 	// 运营方自己停用的条目 —— 用来验证 enabled 与 group_visible 是两个独立维度
 	model.DB.Create(&model.CanvasCatalogModel{
 		RemoteID: "vip-retired", DisplayName: "VIP Retired", Capabilities: "video_gen",
-		Enabled: false, Contract: "c1", RequiresVocab: 1, SortOrder: 3,
+		Enabled: boolPtr(false), Contract: "c1", RequiresVocab: 1, SortOrder: 3,
 	})
 	// abilities: vip 分组能用 vip-only 与 vip-retired
 	model.DB.Create(&model.Ability{Group: "vip", Model: "vip-only", ChannelId: 1, Enabled: true})
@@ -119,7 +127,7 @@ func TestGetCanvasCatalogNoGroupContextTreatsAllVisible(t *testing.T) {
 
 	model.DB.Create(&model.CanvasCatalogModel{
 		RemoteID: "any-model", DisplayName: "Any", Capabilities: "video_gen",
-		Enabled: true, Contract: "c1", RequiresVocab: 1,
+		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1,
 	})
 	// 故意不插任何 abilities 行:即便如此也不能把条目判成不可见
 	w := httptest.NewRecorder()

@@ -10,7 +10,14 @@ type CanvasCatalogModel struct {
 	RemoteID        string         `json:"remote_id" gorm:"size:128;not null;index"`
 	DisplayName     string         `json:"display_name" gorm:"size:256;not null"`
 	Capabilities    string         `json:"capabilities" gorm:"size:256;not null"`
-	Enabled         bool           `json:"enabled" gorm:"default:true"`
+	// Enabled 必须是指针。它带 default:true,而 GORM 在 Create 时会把 bool 零值
+	// 当成「未设置」交给数据库默认值 —— 实测三种写法(裸 Create、Select("*")、
+	// 点名 Select)生成的 SQL 都是 `enabled` VALUES (true),即 enabled=false
+	// 根本插不进去。管理员传 `"enabled": false`(先建好、暂不上架)会建出一个
+	// 已上架的条目,而条目一上架客户端立刻能看到并下单。
+	// 指针区分得开三态:nil = 未提供(取默认 true)、&false、&true。
+	// 读取时一律走 IsEnabled(),不要直接解引用。
+	Enabled         *bool          `json:"enabled" gorm:"default:true"`
 	Description     string         `json:"description,omitempty" gorm:"type:text"`
 	Pricing         string         `json:"pricing,omitempty" gorm:"size:128"`
 	Limitations     string         `json:"limitations,omitempty" gorm:"type:text"`
@@ -22,6 +29,12 @@ type CanvasCatalogModel struct {
 	CreatedTime     int64          `json:"created_time" gorm:"bigint"`
 	UpdatedTime     int64          `json:"updated_time" gorm:"bigint"`
 	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"`
+}
+
+// IsEnabled 读取启用状态。Enabled 是指针(见字段注释),nil 表示调用方未提供,
+// 按 default:true 的语义视为启用。所有判断都该走这里,不要直接解引用。
+func (c *CanvasCatalogModel) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 func (c *CanvasCatalogModel) Insert() error {

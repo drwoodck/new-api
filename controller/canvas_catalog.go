@@ -89,7 +89,7 @@ func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}) c
 		RemoteID:      m.RemoteID,
 		DisplayName:   m.DisplayName,
 		Capabilities:  parseCapabilities(m.Capabilities),
-		Enabled:       m.Enabled,
+		Enabled:       m.IsEnabled(),
 		Contract:      m.Contract,
 		RequiresVocab: m.RequiresVocab,
 		// nil 集合 = 无分组信息 = 不降级任何条目
