@@ -43,6 +43,13 @@ const (
 	DefaultUserSessionIssuanceWindowSeconds = 24 * 60 * 60
 	DefaultUserSessionRevokedRetentionDays  = 7
 	DefaultUserSessionHourlyAlertThreshold  = 5000
+
+	// 产物落盘：保留期与存储目录。设计文档 §4.6 建议 7-14 天，取中值 10。
+	DefaultArtifactRetentionDays = 10
+
+	// 默认落在 /data 下 —— Dockerfile 的 WORKDIR 与 docker-compose.yml 的
+	// ./data:/data 卷挂载都指向它，既有用户不改 compose 也能持久化。
+	DefaultArtifactStorageDir = "/data/artifacts"
 )
 
 var (
@@ -135,6 +142,10 @@ var RetryTimes = 0
 //var RootUserEmail = ""
 
 var IsMasterNode bool
+
+// 产物落盘配置：保留期（天）与存储根目录，环境变量可覆盖，见 common/init.go。
+var ArtifactRetentionDays = DefaultArtifactRetentionDays
+var ArtifactStorageDir = DefaultArtifactStorageDir
 
 const (
 	NodeNameSourceManual   = "manual"

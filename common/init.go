@@ -66,6 +66,7 @@ func InitEnv() {
 		log.Fatal(err)
 	}
 	initUserSessionSettings()
+	initArtifactSettings()
 	if os.Getenv("SQLITE_PATH") != "" {
 		SQLitePath = os.Getenv("SQLITE_PATH")
 	}
@@ -161,6 +162,16 @@ func initUserSessionSettings() {
 			retentionSeconds,
 			UserSessionIssuanceWindowSeconds,
 		))
+	}
+}
+
+// initArtifactSettings 读取产物落盘的保留期与存储目录环境变量。
+// 照 initUserSessionSettings 的先例：非正值回退默认值，避免配置写错导致
+// 全量清理或写到意外路径。
+func initArtifactSettings() {
+	ArtifactRetentionDays = positiveUserSessionEnv("ARTIFACT_RETENTION_DAYS", DefaultArtifactRetentionDays)
+	if v := os.Getenv("ARTIFACT_STORAGE_DIR"); v != "" {
+		ArtifactStorageDir = v
 	}
 }
 
