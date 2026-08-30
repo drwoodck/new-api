@@ -41,6 +41,7 @@ import {
   useCreateCanvasCatalogModel,
   useUpdateCanvasCatalogModel,
 } from '../hooks/use-canvas-catalog-mutations'
+import { useContractStats } from '../hooks/use-contract-stats'
 import type { CanvasCatalogModel } from '../types'
 
 type CanvasCatalogFormDialogProps = {
@@ -106,6 +107,25 @@ export function CanvasCatalogFormDialog({
   const updateModel = useUpdateCanvasCatalogModel()
 
   const form = useForm<FormValues>({ defaultValues: EMPTY_VALUES })
+  const { data: contractStats } = useContractStats()
+
+  // 契约名 → 支持率文案。契约字段是自由文本输入(不是下拉),摸底确认后按
+  // 「字段下方提示列表」渲染,而非选项后缀。
+  // 「没有任何客户端支持」必须显式显示为 0/N,不能留空 —— 那正是这个功能
+  // 存在的理由(运营方上架了一个没人能用的模型)。
+  const contractSupportLabel = (contract: string): string | null => {
+    if (!contractStats || !contract) return null
+    const stat = contractStats.contracts.find((c) => c.contract === contract)
+    if (!stat) {
+      return t('canvasCatalog.contractSupport.none', {
+        total: contractStats.online_installs,
+      })
+    }
+    return t('canvasCatalog.contractSupport.rate', {
+      supported: stat.supported,
+      total: stat.total,
+    })
+  }
 
   useEffect(() => {
     if (open && isEdit && currentModel) {
@@ -240,18 +260,24 @@ export function CanvasCatalogFormDialog({
             control={form.control}
             name='contract'
             rules={{ required: t('contract 不能为空') }}
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t('Contract *')}</FormLabel>
-                <FormControl>
-                  <Input placeholder='relay_video_async_v1' {...field} />
-                </FormControl>
-                <FormDescription>
-                  {t('必须对应画布客户端已内置的 profile 模板 ID,填错该条目会被画布逐条跳过')}
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
+            render={({ field }) => {
+              const supportLabel = contractSupportLabel(field.value)
+              return (
+                <FormItem>
+                  <FormLabel>{t('Contract *')}</FormLabel>
+                  <FormControl>
+                    <Input placeholder='relay_video_async_v1' {...field} />
+                  </FormControl>
+                  <FormDescription>
+                    {t('必须对应画布客户端已内置的 profile 模板 ID,填错该条目会被画布逐条跳过')}
+                  </FormDescription>
+                  {supportLabel ? (
+                    <FormDescription>{supportLabel}</FormDescription>
+                  ) : null}
+                  <FormMessage />
+                </FormItem>
+              )
+            }}
           />
 
           <FormField

@@ -5317,6 +5317,9 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "canvasCatalog.contractSupport.rate": "{{supported}}/{{total}} 台のオンラインクライアントが対応",
+    "canvasCatalog.contractSupport.none": "0/{{total}} 台のオンラインクライアントが対応 —— 公開すると既存クライアントは使用できません",
+    "canvasCatalog.contractSupport.loading": "クライアント対応状況を集計中..."
   }
 }

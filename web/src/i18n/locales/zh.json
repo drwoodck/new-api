@@ -5317,6 +5317,9 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "canvasCatalog.contractSupport.rate": "{{supported}}/{{total}} 个在线客户端支持",
+    "canvasCatalog.contractSupport.none": "0/{{total}} 个在线客户端支持 —— 上架后现有客户端都无法使用",
+    "canvasCatalog.contractSupport.loading": "正在统计客户端支持情况"
   }
 }

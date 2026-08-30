@@ -53,3 +53,22 @@ export async function deleteCanvasCatalogModel(
   const res = await api.delete(`/api/canvas/admin/models/${id}`)
   return res.data
 }
+
+export interface ContractStat {
+  contract: string
+  supported: number
+  total: number
+}
+
+export interface ContractStatsResponse {
+  online_installs: number
+  window_days: number
+  contracts: ContractStat[]
+}
+
+export async function fetchContractStats(): Promise<
+  ApiResponse<ContractStatsResponse>
+> {
+  const res = await api.get('/api/canvas/admin/contract-stats')
+  return res.data
+}
