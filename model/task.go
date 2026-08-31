@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -110,6 +111,11 @@ type TaskPrivateData struct {
 	TokenId        int                 `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
 	NodeName       string              `json:"node_name,omitempty"`       // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
 	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	// 产物落盘后的相对路径(相对 service.ArtifactDir())。空 = 未落盘。
+	ArtifactPath string `json:"artifact_path,omitempty"`
+	// 落盘发生在哪个节点。多节点部署时,只有这个节点的磁盘上有文件 ——
+	// 其他节点的代理必须回退到实时上游拉取。
+	ArtifactNode string `json:"artifact_node,omitempty"`
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
@@ -350,6 +356,46 @@ func GetByTaskId(userId int, taskId string) (*Task, bool, error) {
 		return nil, false, err
 	}
 	return task, exist, err
+}
+
+// GetTaskByTaskID 按 task_id 查询任务,不限定 user_id。
+//
+// 用于后台流程(如任务轮询触发的产物下载),那里没有请求上下文里的用户身份,
+// 只有一个已知合法的 taskID。找不到时返回 (nil, nil),不是错误 ——
+// 调用方按惯例区分“不存在”与“查询失败”。
+func GetTaskByTaskID(taskID string) (*Task, error) {
+	if taskID == "" {
+		return nil, nil
+	}
+	var task *Task
+	err := DB.Where("task_id = ?", taskID).First(&task).Error
+	exist, err := RecordExist(err)
+	if err != nil {
+		return nil, err
+	}
+	if !exist {
+		return nil, nil
+	}
+	return task, nil
+}
+
+// UpdateTaskArtifact 写回产物落盘后的相对路径与所在节点。
+//
+// 只更新 private_data 列 —— PrivateData 不参与 taskSnapshot 的相等性判定
+// (见 Snapshot/Equal),所以这两个字段的写入不能走 UpdateWithStatus 的 CAS,
+// 需要单独的、不带状态前提的更新。先读出当前行,在内存里改这两个字段,
+// 再整列写回,避免并发的其它 PrivateData 写入被整列覆盖。
+func UpdateTaskArtifact(taskID string, relPath string, node string) error {
+	if taskID == "" {
+		return errors.New("taskID 为空")
+	}
+	var task Task
+	if err := DB.Where("task_id = ?", taskID).First(&task).Error; err != nil {
+		return err
+	}
+	task.PrivateData.ArtifactPath = relPath
+	task.PrivateData.ArtifactNode = node
+	return DB.Model(&task).Select("private_data").Updates(&task).Error
 }
 
 func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {

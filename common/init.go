@@ -66,6 +66,7 @@ func InitEnv() {
 		log.Fatal(err)
 	}
 	initUserSessionSettings()
+	initArtifactSettings()
 	if os.Getenv("SQLITE_PATH") != "" {
 		SQLitePath = os.Getenv("SQLITE_PATH")
 	}
@@ -161,6 +162,31 @@ func initUserSessionSettings() {
 			retentionSeconds,
 			UserSessionIssuanceWindowSeconds,
 		))
+	}
+}
+
+// initArtifactSettings 读取产物落盘的保留期与存储目录环境变量。
+//
+// 与 initUserSessionSettings 不同，这里**不能**用 positiveUserSessionEnv：
+// 0 对本设置是有意义的取值，表示「关闭清理」（docker-compose.yml 就是这么写的）。
+// 用那个助手会把 0 静默换成 10 天，于是运营方为了停止删除而设 0，实际得到的是
+// 10 天后照删——按明确指示操作却丢了数据。负值仍视为配置写错，回退默认。
+//
+// 下游 cleanupOrphanFiles 已有 retentionDays <= 0 时一律不清理的守卫，
+// 所以 0 会一路传到那里并如实生效。
+func initArtifactSettings() {
+	ArtifactRetentionDays = GetEnvOrDefault("ARTIFACT_RETENTION_DAYS", DefaultArtifactRetentionDays)
+	if ArtifactRetentionDays < 0 {
+		SysError(fmt.Sprintf(
+			"ARTIFACT_RETENTION_DAYS must be 0 (disable cleanup) or positive, using default value: %d",
+			DefaultArtifactRetentionDays))
+		ArtifactRetentionDays = DefaultArtifactRetentionDays
+	}
+	if ArtifactRetentionDays == 0 {
+		SysLog("ARTIFACT_RETENTION_DAYS=0: artifact cleanup is disabled, disk usage will grow unbounded")
+	}
+	if v := os.Getenv("ARTIFACT_STORAGE_DIR"); v != "" {
+		ArtifactStorageDir = v
 	}
 }
 

@@ -582,6 +582,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			logger.LogWarn(ctx, fmt.Sprintf("Task %s CAS lost or no-op update, skip billing", task.TaskID))
 			shouldRefund = false
 			shouldSettle = false
+		} else {
+			// 产物落盘。异步,不阻塞轮询批次;失败只退回实时透传。
+			// 放在 CAS 赢了的分支内 —— 输了说明别的节点已处理过这次状态翻转,
+			// 重复触发会重复下载。
+			if task.Status == model.TaskStatusSuccess {
+				TriggerArtifactDownload(task.TaskID)
+			}
 		}
 	} else if !snap.Equal(task.Snapshot()) {
 		if _, err := task.UpdateWithStatus(snap.Status); err != nil {

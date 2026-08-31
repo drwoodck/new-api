@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -53,6 +54,28 @@ func VideoProxy(c *gin.Context) {
 		videoProxyError(c, http.StatusBadRequest, "invalid_request_error",
 			fmt.Sprintf("Task is not completed yet, current status: %s", task.Status))
 		return
+	}
+
+	// 优先读本地副本。命中则跳过渠道查询、URL 解析、SSRF 校验与上游请求。
+	//
+	// 缺失是正常情况不是错误,三种成因都必须静默回退到下面的实时透传:
+	//   - 多节点部署,文件在别的节点磁盘上
+	//   - 保留期已过,文件被清理
+	//   - 落盘当时失败(厂商链接已过期、上游限流)
+	if shouldTryLocalArtifact(task.PrivateData.ArtifactPath, task.PrivateData.ArtifactNode, common.NodeName) {
+		if f, err := service.OpenArtifact(task.PrivateData.ArtifactPath); err == nil {
+			defer f.Close()
+			if st, statErr := f.Stat(); statErr == nil {
+				// 与透传路径保持同一个缓存策略(原第 178 行)
+				c.Header("Cache-Control", "public, max-age=86400")
+				c.Header("Content-Type", contentTypeForArtifactPath(task.PrivateData.ArtifactPath))
+				// ServeContent 顺带支持 Range 请求 —— 透传路径不支持,
+				// 这让本地命中时拖进度条能秒定位
+				http.ServeContent(c.Writer, c.Request, filepath.Base(task.PrivateData.ArtifactPath), st.ModTime(), f)
+				return
+			}
+		}
+		// 打开或 stat 失败 —— 落到下面的实时透传,不记 error 级日志
 	}
 
 	channel, err := model.CacheGetChannel(task.ChannelId)
@@ -180,6 +203,42 @@ func VideoProxy(c *gin.Context) {
 	if _, err = io.Copy(c.Writer, resp.Body); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to stream video content: %s", err.Error()))
 	}
+}
+
+// artifactContentTypes 是 service.artifactExtByType 的反向映射。
+// 本地分支没有上游响应可复制 header,必须自己推断 Content-Type ——
+// 留空会让浏览器猜,可能猜成 text/html 并把视频当文本渲染。
+var artifactContentTypes = map[string]string{
+	".mp4":  "video/mp4",
+	".webm": "video/webm",
+	".mov":  "video/quicktime",
+	".png":  "image/png",
+	".jpg":  "image/jpeg",
+	".webp": "image/webp",
+	".gif":  "image/gif",
+	".mp3":  "audio/mpeg",
+	".wav":  "audio/wav",
+}
+
+func contentTypeForArtifactPath(relPath string) string {
+	if ct, ok := artifactContentTypes[strings.ToLower(filepath.Ext(relPath))]; ok {
+		return ct
+	}
+	return "application/octet-stream"
+}
+
+// shouldTryLocalArtifact 判断是否值得尝试读本地文件。
+//
+// 落盘节点为空时仍尝试:单节点部署下 NodeName 可能是空串,
+// 严格比对会让落盘完全失效。文件真不在时 OpenArtifact 会失败并自然回退。
+func shouldTryLocalArtifact(artifactPath, artifactNode, thisNode string) bool {
+	if artifactPath == "" {
+		return false
+	}
+	if artifactNode != "" && thisNode != "" && artifactNode != thisNode {
+		return false
+	}
+	return true
 }
 
 func writeVideoDataURL(c *gin.Context, dataURL string) error {
