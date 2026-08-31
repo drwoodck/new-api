@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Loader2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -82,6 +82,25 @@ const EMPTY_VALUES: FormValues = {
   sort_order: 0,
 }
 
+// 与后端 constant.ContractForCapability(constant/canvas_contract.go)保持同一份映射。
+// 画布侧总共只有两个契约,与 capability 一一对应 —— 见该文件注释。这里只做
+// UI 层的即时预填,后端在 create/update 时仍会按同一映射兜底一次,前端猜错
+// 或漏填都不会导致条目落库出错。
+const CONTRACT_BY_CAPABILITY: Record<string, string> = {
+  video_gen: 'relay_video_async_v1',
+  image_gen: 'relay_image_async_v1',
+}
+
+function deriveContractFromCapabilities(raw: string): string | null {
+  for (const part of raw.split(/[,，、;；\s]+/)) {
+    const trimmed = part.trim()
+    if (trimmed && CONTRACT_BY_CAPABILITY[trimmed]) {
+      return CONTRACT_BY_CAPABILITY[trimmed]
+    }
+  }
+  return null
+}
+
 // schema_override 只在此处做"合法 JSON"校验。真正的词汇表(ResolvedProfile)
 // 校验在画布 Rust 端 validate_schema_json,此处填错会被画布逐条跳过,不影响其余条目。
 function validateOptionalJson(value: string): string | true {
@@ -108,6 +127,9 @@ export function CanvasCatalogFormDialog({
 
   const form = useForm<FormValues>({ defaultValues: EMPTY_VALUES })
   const { data: contractStats } = useContractStats()
+  // 只在「新建 + 管理员还没手动碰过 contract 字段」时才自动预填 —— 一旦手改
+  // 过(逃生舱),或是编辑既有条目(已经有权威值),都不再覆盖。
+  const contractManuallyEdited = useRef(false)
 
   // 契约名 → 支持率文案。契约字段是自由文本输入(不是下拉),摸底确认后按
   // 「字段下方提示列表」渲染,而非选项后缀。
@@ -145,6 +167,7 @@ export function CanvasCatalogFormDialog({
       })
     } else if (open && !isEdit) {
       form.reset(EMPTY_VALUES)
+      contractManuallyEdited.current = false
     }
   }, [open, isEdit, currentModel, form])
 
@@ -246,7 +269,19 @@ export function CanvasCatalogFormDialog({
               <FormItem>
                 <FormLabel>{t('能力')}</FormLabel>
                 <FormControl>
-                  <Input placeholder='video_gen' {...field} />
+                  <Input
+                    placeholder='video_gen'
+                    {...field}
+                    onChange={(e) => {
+                      field.onChange(e)
+                      // 新建且管理员未手动改过 contract 时才自动预填 —— 编辑既有
+                      // 条目或手改过之后都不再覆盖(逃生舱)。
+                      if (!isEdit && !contractManuallyEdited.current) {
+                        const derived = deriveContractFromCapabilities(e.target.value)
+                        if (derived) form.setValue('contract', derived)
+                      }
+                    }}
+                  />
                 </FormControl>
                 <FormDescription>
                   {t('逗号分隔,如 video_gen,VideoGen')}
@@ -266,7 +301,15 @@ export function CanvasCatalogFormDialog({
                 <FormItem>
                   <FormLabel>{t('Contract *')}</FormLabel>
                   <FormControl>
-                    <Input placeholder='relay_video_async_v1' {...field} />
+                    <Input
+                      placeholder='relay_video_async_v1'
+                      {...field}
+                      onChange={(e) => {
+                        // 手改即视为逃生舱:此后不再被能力字段的自动预填覆盖。
+                        contractManuallyEdited.current = true
+                        field.onChange(e)
+                      }}
+                    />
                   </FormControl>
                   <FormDescription>
                     {t('必须对应画布客户端已内置的 profile 模板 ID,填错该条目会被画布逐条跳过')}
