@@ -163,3 +163,77 @@ func TestGetAllCanvasCatalogModelsAdminIncludesDisabled(t *testing.T) {
 	require.NoError(t, json.Unmarshal(resp.Data, &all))
 	assert.Len(t, all, 2)
 }
+
+// TestCreateCanvasCatalogModelAdminDerivesContractFromCapability 锁住 Task 3 的
+// 契约推导:管理员填了 capability 但没填 contract 时,服务端要按
+// constant.ContractForCapability 自动填上,而不是要求「contract 不能为空」。
+func TestCreateCanvasCatalogModelAdminDerivesContractFromCapability(t *testing.T) {
+	router := setupCatalogAdminTestDB(t)
+
+	w, resp := doJSON(t, router, "POST", "/api/canvas/admin/models", model.CanvasCatalogModel{
+		RemoteID:     "derive-video",
+		DisplayName:  "Derive Video",
+		Capabilities: "video_gen",
+		// Contract 有意留空
+	})
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.True(t, resp.Success, resp.Message)
+
+	var created model.CanvasCatalogModel
+	require.NoError(t, json.Unmarshal(resp.Data, &created))
+	assert.Equal(t, "relay_video_async_v1", created.Contract)
+}
+
+// TestCreateCanvasCatalogModelAdminManualContractWinsOverDerivation 锁住逃生舱:
+// 管理员手填的 contract 永远优先,即便它和 capability 推导出的值不一致 ——
+// 新契约/新 capability 上线前,人工兜底不能被自动推导覆盖。
+func TestCreateCanvasCatalogModelAdminManualContractWinsOverDerivation(t *testing.T) {
+	router := setupCatalogAdminTestDB(t)
+
+	w, resp := doJSON(t, router, "POST", "/api/canvas/admin/models", model.CanvasCatalogModel{
+		RemoteID:     "manual-override",
+		DisplayName:  "Manual Override",
+		Capabilities: "video_gen",
+		Contract:     "relay_image_async_v1", // 故意填一个与推导结果不同的值
+	})
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.True(t, resp.Success, resp.Message)
+
+	var created model.CanvasCatalogModel
+	require.NoError(t, json.Unmarshal(resp.Data, &created))
+	assert.Equal(t, "relay_image_async_v1", created.Contract, "手填必须优先于推导")
+}
+
+// TestCreateCanvasCatalogModelAdminUnknownCapabilityStillRequiresContract 锁住
+// 「不猜」:capability 推导不出已知契约时,仍要求管理员手填,而不是留空硬塞进库。
+func TestCreateCanvasCatalogModelAdminUnknownCapabilityStillRequiresContract(t *testing.T) {
+	router := setupCatalogAdminTestDB(t)
+
+	_, resp := doJSON(t, router, "POST", "/api/canvas/admin/models", model.CanvasCatalogModel{
+		RemoteID:     "unknown-cap",
+		DisplayName:  "Unknown Capability",
+		Capabilities: "some_future_capability",
+	})
+	assert.False(t, resp.Success)
+}
+
+// TestUpdateCanvasCatalogModelAdminDerivesContractFromCapability 更新路径同 Create
+// 一样支持推导 —— 管理员编辑既有条目、清空 contract 只填 capability 时也该生效。
+func TestUpdateCanvasCatalogModelAdminDerivesContractFromCapability(t *testing.T) {
+	router := setupCatalogAdminTestDB(t)
+
+	existing := model.CanvasCatalogModel{
+		RemoteID: "update-derive", DisplayName: "Update Derive",
+		Capabilities: "image_gen", Contract: "relay_image_async_v1",
+	}
+	require.NoError(t, existing.Insert())
+
+	existing.Contract = "" // 模拟管理员清空 contract,只保留 capability
+	w, resp := doJSON(t, router, "PUT", "/api/canvas/admin/models", existing)
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.True(t, resp.Success, resp.Message)
+
+	var updated model.CanvasCatalogModel
+	require.NoError(t, json.Unmarshal(resp.Data, &updated))
+	assert.Equal(t, "relay_image_async_v1", updated.Contract)
+}

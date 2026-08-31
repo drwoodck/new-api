@@ -4,10 +4,27 @@ import (
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
 )
+
+// deriveContractIfEmpty 按 capabilities 的第一个已知 capability 推出 contract,
+// 但只在管理员没填时才推 —— 手填永远优先(逃生舱,新契约/新 capability 上线前
+// 靠人先兜底)。取不到已知映射就原样留空,交给既有的「contract 不能为空」校验
+// 报错,而不是猜一个可能错的值。
+func deriveContractIfEmpty(m *model.CanvasCatalogModel) {
+	if m.Contract != "" {
+		return
+	}
+	for _, cap := range parseCapabilities(m.Capabilities) {
+		if contract, ok := constant.ContractForCapability(cap); ok {
+			m.Contract = contract
+			return
+		}
+	}
+}
 
 // GetAllCanvasCatalogModelsAdmin 管理端获取全部目录条目(含禁用),不分页。
 func GetAllCanvasCatalogModelsAdmin(c *gin.Context) {
@@ -50,8 +67,9 @@ func CreateCanvasCatalogModelAdmin(c *gin.Context) {
 		common.ApiErrorMsg(c, "display_name 不能为空")
 		return
 	}
+	deriveContractIfEmpty(&m)
 	if m.Contract == "" {
-		common.ApiErrorMsg(c, "contract 不能为空")
+		common.ApiErrorMsg(c, "contract 不能为空,且无法从 capabilities 推导(未知 capability),请手填")
 		return
 	}
 	if dup, err := model.IsCanvasCatalogRemoteIDDuplicated(0, m.RemoteID); err != nil {
@@ -88,6 +106,7 @@ func UpdateCanvasCatalogModelAdmin(c *gin.Context) {
 		common.ApiErrorMsg(c, "display_name 不能为空")
 		return
 	}
+	deriveContractIfEmpty(&m)
 	if m.Contract == "" {
 		common.ApiErrorMsg(c, "contract 不能为空")
 		return
