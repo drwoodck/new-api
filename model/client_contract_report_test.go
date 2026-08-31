@@ -9,15 +9,30 @@ import (
 	"gorm.io/gorm"
 )
 
-// setupClientContractReportTestDB 复用 model/canvas_catalog_test.go 里
-// setupCanvasCatalogTestDB 的建库方式(sqlite 内存库),额外迁移本文件的表。
-// 不新增测试基建,只是同一模式换一张表。
+// setupClientContractReportTestDB 给每个测试一个独立的内存库,并在结束时把
+// 包级 DB 还原成 TestMain 建的共享实例。
+//
+// 此前这里用 "file::memory:?cache=shared" 且从不还原 DB —— 两个问题:
+// 1) 该 DSN 进程级共享,本文件多个测试的行会互相累积;
+// 2) 换掉包级 DB 却不还原,导致本包按字母序排在后面的任何测试(User/Task/
+//    SystemTask 等一整套表)在这个测试跑过之后全部撞上
+//    "no such table: users"——不是那些测试自己坏了,是这里污染了共享状态。
+// 照 device_binding_test.go / catalog_cascade_test.go 已经用的模式改。
 func setupClientContractReportTestDB(t *testing.T) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	dsn := "file:client_contract_report_" + t.Name() + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	DB = db
 	require.NoError(t, db.AutoMigrate(&ClientContractReport{}))
+	saved := DB
+	DB = db
+	t.Cleanup(func() {
+		DB = saved
+		sqlDB, _ := db.DB()
+		if sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+	})
 }
 
 // 同一 install_id 重复上报只留一行 —— 画布每次登录/同步都会报,

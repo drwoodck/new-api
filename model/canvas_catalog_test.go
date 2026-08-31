@@ -23,7 +23,15 @@ func setupCanvasCatalogTestDB(t *testing.T) {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+
+	// package 级 DB 是 TestMain 建的共享实例，装了 User/UserSession/Task 等一整套表——
+	// 本包其它文件的测试直接假设它一直在。此前这里只关连接、不还原 DB，
+	// 导致跑在这个测试之后的任何测试都会撞上 "no such table: tasks" 之类的错误
+	// （同一个坑在 device_binding_test.go 和 catalog_cascade_test.go 里也出现过，
+	// 这是这三个文件里最后一个没修的）。
+	original := DB
 	t.Cleanup(func() {
+		DB = original
 		if sqlDB, err := db.DB(); err == nil {
 			sqlDB.Close()
 		}
