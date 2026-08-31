@@ -18,8 +18,16 @@ func setupDeviceTestDB(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&DeviceBinding{}, &Token{}))
+
+	// package 级 DB 是 TestMain 建的共享实例，装了 User/UserSession/Task 等一整套表——
+	// 本包其它文件的测试直接假设它一直在。换成这里的私有库前必须存一份，
+	// 测试结束照原样还回去，否则跑在这个测试之后的任何测试都会撞上
+	// "no such table: users" 之类的错误（这就是此前 37 个无关测试失败的真因，
+	// 不是它们自己坏了）。
+	original := DB
 	DB = db
 	t.Cleanup(func() {
+		DB = original
 		sqlDB, _ := db.DB()
 		if sqlDB != nil {
 			_ = sqlDB.Close()

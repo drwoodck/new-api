@@ -24,6 +24,12 @@ func setupDeviceControllerTestDB(t *testing.T) *gorm.DB {
 	gin.SetMode(gin.TestMode)
 	common.RedisEnabled = false
 
+	// model.DB 是包级共享变量,model 包的 TestMain 把它建成一个迁移了
+	// User/UserSession/Task 等表的全局库,供整个 model 测试二进制复用。
+	// 把它换成一个只有 DeviceBinding/Token 的私有库却不换回来,会让
+	// 本文件之后按顺序跑的其它包测试在缺表的库上失败——这里显式保存/还原。
+	originalDB := model.DB
+
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
@@ -32,6 +38,7 @@ func setupDeviceControllerTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, db.AutoMigrate(&model.DeviceBinding{}, &model.Token{}))
 
 	t.Cleanup(func() {
+		model.DB = originalDB
 		sqlDB, err := db.DB()
 		if err == nil {
 			_ = sqlDB.Close()
