@@ -510,6 +510,21 @@ func TaskCountAllUserTask(userId int, queryParams SyncTaskQueryParams) int64 {
 	_ = query.Count(&total).Error
 	return total
 }
+
+// CountActiveTasksForUser 统计该用户尚未终结的任务数(QUEUED/SUBMITTED/IN_PROGRESS)。
+//
+// TaskCountAllUserTask 只能按单个 status 过滤,HasUnfinishedSyncTasks 是全局的
+// (不分用户)——分组并发限制需要的是"这个用户当前有多少个跑着的任务",
+// 两个既有查询都不是这个形状,所以单独加。
+func CountActiveTasksForUser(userId int) (int64, error) {
+	var total int64
+	err := DB.Model(&Task{}).
+		Where("user_id = ?", userId).
+		Where("status IN ?", []TaskStatus{TaskStatusQueued, TaskStatusSubmitted, TaskStatusInProgress}).
+		Count(&total).Error
+	return total, err
+}
+
 func (t *Task) ToOpenAIVideo() *dto.OpenAIVideo {
 	openAIVideo := dto.NewOpenAIVideo()
 	openAIVideo.ID = t.TaskID

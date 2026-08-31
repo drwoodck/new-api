@@ -505,6 +505,27 @@ func RelayTask(c *gin.Context) {
 		return
 	}
 
+	// 并发上限检查必须在重试循环之前、只做一次 —— 放进循环内会把一次提交计成
+	// 多次检查，且重试是同一次提交的延续，不该被并发限制拦第二遍。
+	if concErr := service.CheckGroupConcurrencyLimit(relayInfo.UserId, relayInfo.TokenGroup); concErr != nil {
+		var limitErr *service.ErrGroupConcurrencyLimitReached
+		if errors.As(concErr, &limitErr) {
+			respondTaskError(c, &taskdto.TaskError{
+				Code:       "group_concurrency_limit_reached",
+				Message:    limitErr.Error(),
+				StatusCode: http.StatusTooManyRequests,
+				Data: gin.H{
+					"group":   limitErr.Group,
+					"current": limitErr.Current,
+					"limit":   limitErr.Limit,
+				},
+			})
+		} else {
+			respondTaskError(c, service.TaskErrorWrapper(concErr, "concurrency_check_failed", http.StatusInternalServerError))
+		}
+		return
+	}
+
 	var result *relay.TaskSubmitResult
 	var taskErr *taskdto.TaskError
 	defer func() {
