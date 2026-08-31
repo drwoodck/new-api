@@ -762,6 +762,15 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			if err != nil {
 				common.SysLog(fmt.Sprintf("failed to update ability status: channel_id=%d, error=%v", channelId, err))
 			}
+			// 渠道停用可能让某个目录条目失去最后一个启用渠道 —— 级联软停用
+			// (决策 3)。只在停用方向触发有意义(启用永不导致条目失去覆盖),
+			// 但函数本身对任何方向调用都安全(找不到失去覆盖的条目就是空操作),
+			// 不必在这里判断方向,避免和上面 UpdateAbilityStatus 的条件产生耦合。
+			// 失败只记日志、不影响渠道状态更新本身 —— 这是维护性联动，不是
+			// 渠道启停的强依赖。
+			if cascadeErr := SoftDisableUncoveredCatalogEntries(); cascadeErr != nil {
+				common.SysLog(fmt.Sprintf("failed to cascade-disable canvas catalog entries: %v", cascadeErr))
+			}
 		}
 	}()
 	channel, err := GetChannelById(channelId, true)
@@ -810,7 +819,15 @@ func DisableChannelByTag(tag string) error {
 		return err
 	}
 	err = UpdateAbilityStatusByTag(tag, false)
-	return err
+	if err != nil {
+		return err
+	}
+	// 同 UpdateChannelStatus:批量按 tag 停用同样可能让某个目录条目失去
+	// 最后一个启用渠道,需要联动软停用检查。
+	if cascadeErr := SoftDisableUncoveredCatalogEntries(); cascadeErr != nil {
+		common.SysLog("failed to cascade-disable canvas catalog entries after tag disable: " + cascadeErr.Error())
+	}
+	return nil
 }
 
 func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {

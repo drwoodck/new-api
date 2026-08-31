@@ -126,6 +126,19 @@ func UpdateCanvasCatalogModelAdmin(c *gin.Context) {
 	common.ApiSuccess(c, &m)
 }
 
+// GetModelMappingInconsistenciesAdmin 列出同一对外模型名在不同启用渠道上
+// 映射到不同上游目标的情况,供管理后台展示告警。不阻断任何保存操作 ——
+// 见 model.CheckModelMappingConsistency 的注释:多渠道映射不同是合法的
+// 负载均衡场景,这里只是给运营方一个"看起来像手误"的提示。
+func GetModelMappingInconsistenciesAdmin(c *gin.Context) {
+	inconsistencies, err := model.CheckModelMappingConsistency()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, inconsistencies)
+}
+
 // DeleteCanvasCatalogModelAdmin 删除(软删除)目录条目。
 func DeleteCanvasCatalogModelAdmin(c *gin.Context) {
 	idStr := c.Param("id")
