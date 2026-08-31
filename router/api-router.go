@@ -258,6 +258,7 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			canvasRoute.GET("/catalog", controller.GetCanvasCatalog)
 			canvasRoute.POST("/device-bind", controller.BindCanvasDevice)
+			canvasRoute.POST("/client-contracts", controller.ReportClientContracts)
 		}
 
 		canvasAdminRoute := apiRouter.Group("/canvas/admin")
@@ -268,6 +269,7 @@ func SetApiRouter(router *gin.Engine) {
 			canvasAdminRoute.POST("/models", controller.CreateCanvasCatalogModelAdmin)
 			canvasAdminRoute.PUT("/models", controller.UpdateCanvasCatalogModelAdmin)
 			canvasAdminRoute.DELETE("/models/:id", controller.DeleteCanvasCatalogModelAdmin)
+			canvasAdminRoute.GET("/contract-stats", controller.GetCanvasContractStats)
 		}
 
 		usageRoute := apiRouter.Group("/usage")

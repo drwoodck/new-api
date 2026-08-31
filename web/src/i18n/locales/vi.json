@@ -5317,6 +5317,9 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "canvasCatalog.contractSupport.rate": "{{supported}}/{{total}} client trực tuyến hỗ trợ",
+    "canvasCatalog.contractSupport.none": "0/{{total}} client trực tuyến hỗ trợ —— không client hiện có nào có thể dùng nếu niêm yết",
+    "canvasCatalog.contractSupport.loading": "Đang tính toán mức hỗ trợ của client..."
   }
 }

@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"strings"
+	"fmt"
 	"bytes"
 	"encoding/json"
 	"net/http"
@@ -25,8 +27,14 @@ type adminApiResponse struct {
 func setupCatalogAdminTestDB(t *testing.T) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			sqlDB.Close()
+		}
+	})
 	model.DB = db
 	require.NoError(t, db.AutoMigrate(&model.CanvasCatalogModel{}))
 
@@ -66,7 +74,7 @@ func TestCreateCanvasCatalogModelAdmin(t *testing.T) {
 		DisplayName: "seedance-2.0",
 		Capabilities: "video_gen",
 		Contract:    "relay_video_async_v1",
-		Enabled:     true,
+		Enabled:     boolPtr(true),
 	})
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.True(t, resp.Success)
@@ -112,7 +120,7 @@ func TestUpdateCanvasCatalogModelAdmin(t *testing.T) {
 		RemoteID:    "m1",
 		DisplayName: "New Name",
 		Contract:    "relay_video_async_v1",
-		Enabled:     true,
+		Enabled:     boolPtr(true),
 	})
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.True(t, resp.Success)
@@ -150,8 +158,8 @@ func TestDeleteCanvasCatalogModelAdmin(t *testing.T) {
 func TestGetAllCanvasCatalogModelsAdminIncludesDisabled(t *testing.T) {
 	router := setupCatalogAdminTestDB(t)
 
-	enabled := model.CanvasCatalogModel{RemoteID: "enabled-1", DisplayName: "Enabled", Contract: "c", Enabled: true}
-	disabled := model.CanvasCatalogModel{RemoteID: "disabled-1", DisplayName: "Disabled", Contract: "c", Enabled: false}
+	enabled := model.CanvasCatalogModel{RemoteID: "enabled-1", DisplayName: "Enabled", Contract: "c", Enabled: boolPtr(true)}
+	disabled := model.CanvasCatalogModel{RemoteID: "disabled-1", DisplayName: "Disabled", Contract: "c", Enabled: boolPtr(false)}
 	require.NoError(t, enabled.Insert())
 	require.NoError(t, disabled.Insert())
 

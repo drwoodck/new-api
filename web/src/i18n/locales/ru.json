@@ -5317,6 +5317,9 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "canvasCatalog.contractSupport.rate": "{{supported}}/{{total}} онлайн-клиентов поддерживают это",
+    "canvasCatalog.contractSupport.none": "0/{{total}} онлайн-клиентов поддерживают это — ни один существующий клиент не сможет использовать это",
+    "canvasCatalog.contractSupport.loading": "Подсчёт поддержки клиентов..."
   }
 }

@@ -5317,6 +5317,9 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "canvasCatalog.contractSupport.rate": "{{supported}}/{{total}} clients en ligne le prennent en charge",
+    "canvasCatalog.contractSupport.none": "0/{{total}} clients en ligne le prennent en charge — aucun client existant ne pourrait l'utiliser",
+    "canvasCatalog.contractSupport.loading": "Calcul du support client en cours..."
   }
 }

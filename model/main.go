@@ -343,6 +343,7 @@ func migrateDB() error {
 		&AuthzRole{},
 		&CanvasCatalogModel{},
 		&DeviceBinding{},
+		&ClientContractReport{},
 	)
 	if err != nil {
 		return err
@@ -406,6 +407,7 @@ func migrateDBFast() error {
 		{&SystemTaskLock{}, "SystemTaskLock"},
 		{&CanvasCatalogModel{}, "CanvasCatalogModel"}, // 既有遗漏,顺手补(此前只在串行路径注册)
 		{&DeviceBinding{}, "DeviceBinding"},
+		{&ClientContractReport{}, "ClientContractReport"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))

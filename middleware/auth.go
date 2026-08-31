@@ -345,6 +345,19 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 		c.Set("id", token.UserId)
 		c.Set("token_id", token.Id)
 		c.Set("token_key", token.Key)
+
+		// Additive: this middleware already loads both token and userCache to
+		// answer its own status checks above, so computing the effective group
+		// costs zero extra queries. Same override precedence as the full
+		// TokenAuth path (token.Group wins when non-empty, else the user's
+		// group) — see the block below at line ~470. Existing callers that
+		// don't read constant.ContextKeyUsingGroup are unaffected.
+		effectiveGroup := userCache.Group
+		if token.Group != "" {
+			effectiveGroup = token.Group
+		}
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, effectiveGroup)
+
 		c.Next()
 	}
 }
