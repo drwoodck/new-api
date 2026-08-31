@@ -127,6 +127,11 @@ func SetApiRouter(router *gin.Engine) {
 				// Custom OAuth bindings
 				selfRoute.GET("/oauth/bindings", controller.GetUserOAuthBindings)
 				selfRoute.DELETE("/oauth/bindings/:provider_id", controller.UnbindCustomOAuth)
+
+				// Device bindings (canvas install slots). Full user session
+				// required — unbinding deletes a token, a high-impact action.
+				selfRoute.GET("/devices", controller.GetUserDevices)
+				selfRoute.DELETE("/devices/:install_id", controller.DeleteUserDevice)
 			}
 
 			adminRoute := userRoute.Group("/")
@@ -252,6 +257,7 @@ func SetApiRouter(router *gin.Engine) {
 		canvasRoute.Use(middleware.TokenAuthReadOnly())
 		{
 			canvasRoute.GET("/catalog", controller.GetCanvasCatalog)
+			canvasRoute.POST("/device-bind", controller.BindCanvasDevice)
 		}
 
 		canvasAdminRoute := apiRouter.Group("/canvas/admin")
