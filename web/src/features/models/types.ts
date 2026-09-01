@@ -31,6 +31,19 @@ export interface BoundChannel {
 }
 
 /**
+ * Per-group price override for a model in "分组分别定价" (group-specific
+ * pricing) mode. Mirrors Go `model.ModelGroupPrice` — only one of
+ * `model_price` or `model_ratio`/`completion_ratio` should be set per row,
+ * matching the existing per-token vs. per-request pricing split.
+ */
+export interface ModelGroupPrice {
+  group_name: string
+  model_ratio?: number | null
+  completion_ratio?: number | null
+  model_price?: number | null
+}
+
+/**
  * Model entity from API
  */
 export interface Model {
@@ -52,6 +65,14 @@ export interface Model {
   quota_types?: number[]
   matched_models?: string[]
   matched_count?: number
+  /**
+   * Group-specific pricing mode switch. Only valid when name_rule is exact
+   * match (0) — a prefix/suffix/contains row represents many billed names at
+   * once and can't carry a single set of per-group prices (server rejects
+   * this combination; see validateGroupPricingNameRule in the Go controller).
+   */
+  group_pricing_enabled?: boolean
+  group_prices?: ModelGroupPrice[]
 }
 
 /**

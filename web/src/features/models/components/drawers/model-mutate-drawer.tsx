@@ -84,7 +84,78 @@ import { safeJsonParse } from '@/features/system-settings/utils/json-parser'
 import { createModel, updateModel, getModel, getVendors } from '../../api'
 import { getNameRuleOptions, ENDPOINT_TEMPLATES } from '../../constants'
 import { modelsQueryKeys, vendorsQueryKeys, parseModelTags } from '../../lib'
-import type { Model } from '../../types'
+import type { Model, ModelGroupPrice } from '../../types'
+
+// Only exact-match rows can carry per-group prices — a prefix/suffix/contains
+// row represents many billed names at once (see validateGroupPricingNameRule
+// on the Go side, which rejects this combination server-side too).
+const NAME_RULE_EXACT = 0
+
+// One row of the group-pricing editor's UI state. Kept as strings (like the
+// existing ratio/price fields) so partially-typed numeric input doesn't get
+// coerced/clamped mid-keystroke; parsed to numbers only at submit time.
+type GroupPriceRow = {
+  groupName: string
+  modelRatio: string
+  completionRatio: string
+  modelPrice: string
+}
+
+function emptyGroupPriceRow(groupName: string): GroupPriceRow {
+  return { groupName, modelRatio: '', completionRatio: '', modelPrice: '' }
+}
+
+// group_prices (API/DB shape) -> GroupPriceRow[] (editor state), keyed by the
+// group names the form currently knows about via GroupRatio. A stored row for
+// a group name no longer in that set is dropped from the visible list (its
+// server-side row is left alone unless the whole model is saved with
+// groupPricingEnabled=false, which clears everything for that model).
+function toGroupPriceRows(
+  stored: ModelGroupPrice[] | undefined,
+  groupNames: string[]
+): GroupPriceRow[] {
+  const byGroup = new Map((stored || []).map((r) => [r.group_name, r]))
+  return groupNames.map((name) => {
+    const row = byGroup.get(name)
+    if (!row) return emptyGroupPriceRow(name)
+    return {
+      groupName: name,
+      modelRatio: row.model_ratio != null ? String(row.model_ratio) : '',
+      completionRatio:
+        row.completion_ratio != null ? String(row.completion_ratio) : '',
+      modelPrice: row.model_price != null ? String(row.model_price) : '',
+    }
+  })
+}
+
+// GroupPriceRow[] -> group_prices (API shape). A row with a price/ratio
+// counts as "configured"; a fully-blank row for a group is omitted, which is
+// exactly "this group is unavailable" per ResolveGroupPrice.
+function fromGroupPriceRows(rows: GroupPriceRow[]): ModelGroupPrice[] {
+  const out: ModelGroupPrice[] = []
+  for (const row of rows) {
+    const hasPrice = row.modelPrice.trim() !== ''
+    const hasRatio =
+      row.modelRatio.trim() !== '' || row.completionRatio.trim() !== ''
+    if (!hasPrice && !hasRatio) continue
+    const entry: ModelGroupPrice = { group_name: row.groupName }
+    // Fixed price wins outright at billing time, same precedence as the
+    // existing global price-vs-ratio split (see ModelPriceHelper) — mirror it
+    // here so per-group rows carry only the fields billing actually reads.
+    if (hasPrice) {
+      entry.model_price = Number.parseFloat(row.modelPrice)
+    } else {
+      if (row.modelRatio.trim() !== '') {
+        entry.model_ratio = Number.parseFloat(row.modelRatio)
+      }
+      if (row.completionRatio.trim() !== '') {
+        entry.completion_ratio = Number.parseFloat(row.completionRatio)
+      }
+    }
+    out.push(entry)
+  }
+  return out
+}
 
 // Extended schema for ratio configuration (internal form state only)
 const extendedModelFormSchema = z.object({
@@ -252,6 +323,13 @@ export function ModelMutateDrawer({
   // Submit may only rewrite pricing for this name, or for a name the user
   // explicitly priced; anything else it never saw and must leave alone.
   const [loadedPricingName, setLoadedPricingName] = useState<string>('')
+  // Group-specific pricing ("分组分别定价") state. Unlike the legacy
+  // ratio/price fields above, this doesn't live in system options — it's
+  // per-model rows the server already returns on the fetched Model
+  // (group_pricing_enabled / group_prices), so there's no readPricingConfig
+  // equivalent to reuse; loaded straight off modelData in the load effect.
+  const [groupPricingEnabled, setGroupPricingEnabled] = useState(false)
+  const [groupPriceRows, setGroupPriceRows] = useState<GroupPriceRow[]>([])
   // Keep a ref so the load effect can read the latest modelSettings without
   // depending on it: modelSettings is a fresh object on every system-options
   // refetch, and including it in the deps would reset the form under the user.
@@ -350,6 +428,18 @@ export function ModelMutateDrawer({
     return getOptionValue(systemOptionsData.data, defaultModelSettings)
   }, [systemOptionsData])
 
+  // Group names the group-pricing editor offers rows for. Sourced from the
+  // same GroupRatio option the "统一倍率" (unified ratio) page edits — the
+  // set of groups that exist at all, not which ones this model is priced for.
+  const groupNames = useMemo(() => {
+    if (!modelSettings) return []
+    const ratios = safeJsonParse<Record<string, number>>(
+      modelSettings.GroupRatio,
+      { fallback: {}, silent: true }
+    )
+    return Object.keys(ratios).sort()
+  }, [modelSettings])
+
   // The load effect keys off this boolean, not the object: it re-runs once
   // when the settings first arrive (so a drawer opened before that still gets
   // its pricing prefilled), while later refetches only produce a new object
@@ -357,6 +447,14 @@ export function ModelMutateDrawer({
   const hasModelSettings = modelSettings !== null
   useEffect(() => {
     modelSettingsRef.current = modelSettings
+  })
+  // Same ref-not-dep reasoning as modelSettingsRef above — groupNames must be
+  // readable inside the load effect without becoming a dependency of it
+  // (a fresh array identity on every options refetch would re-trigger the
+  // reset-guard that effect's comment protects against).
+  const groupNamesRef = useRef<string[]>([])
+  useEffect(() => {
+    groupNamesRef.current = groupNames
   })
 
   const form = useForm<ExtendedModelFormValues>({
@@ -428,6 +526,10 @@ export function ModelMutateDrawer({
       setPromptPrice(pricing.promptPrice)
       setCompletionPrice(pricing.completionPrice)
       setAdvancedOpen(pricing.advancedOpen)
+      setGroupPricingEnabled(Boolean(model.group_pricing_enabled))
+      setGroupPriceRows(
+        toGroupPriceRows(model.group_prices, groupNamesRef.current)
+      )
       form.reset({
         id: model.id,
         model_name: model.model_name,
@@ -454,6 +556,8 @@ export function ModelMutateDrawer({
       setPromptPrice(pricing.promptPrice)
       setCompletionPrice(pricing.completionPrice)
       setAdvancedOpen(pricing.advancedOpen)
+      setGroupPricingEnabled(false)
+      setGroupPriceRows(toGroupPriceRows(undefined, groupNamesRef.current))
       form.reset({
         model_name: modelName,
         description: '',
@@ -471,6 +575,19 @@ export function ModelMutateDrawer({
 
   const onSubmit = useCallback(
     async (values: ExtendedModelFormValues): Promise<void> => {
+      // Mirror the server's validateGroupPricingNameRule check client-side:
+      // catch it before a round-trip instead of only after the API rejects
+      // it. The server remains the authority — this is a UX shortcut, not a
+      // substitute for it.
+      if (groupPricingEnabled && values.name_rule !== NAME_RULE_EXACT) {
+        toast.error(
+          t(
+            '分组分别定价仅支持精确匹配的模型，请先将匹配规则改为精确匹配，或关闭分组分别定价。'
+          )
+        )
+        return
+      }
+
       setIsSubmitting(true)
       try {
         const submitData = {
@@ -479,6 +596,13 @@ export function ModelMutateDrawer({
           tags: Array.isArray(values.tags) ? values.tags.join(',') : '',
           status: values.status ? 1 : 0,
           sync_official: values.sync_official ? 1 : 0,
+          group_pricing_enabled: groupPricingEnabled,
+          // Sent even when disabled: the server treats "disabled" as an
+          // unconditional clear regardless of what's here (saveModelGroupPrices
+          // on the Go side), so this array only matters when enabled is true.
+          group_prices: groupPricingEnabled
+            ? fromGroupPriceRows(groupPriceRows)
+            : [],
         }
 
         // Remove ratio fields from model data (they're stored in system settings)
@@ -501,17 +625,23 @@ export function ModelMutateDrawer({
         if (response.success) {
           // Handle ratio configuration updates in system settings
           const finalModelName = values.model_name
+          // Group-pricing mode owns this model's price entirely — writing the
+          // legacy global maps too would leave stale entries that ratio_setting
+          // never reads once GroupPricingEnabled flips true, but that
+          // resurface with wrong numbers if the model is ever switched back to
+          // unified mode.
           const hasRatioConfig =
-            (pricingMode === 'per-request' &&
+            !groupPricingEnabled &&
+            ((pricingMode === 'per-request' &&
               values.price &&
               values.price !== '') ||
-            (pricingMode === 'per-token' &&
-              (values.ratio ||
-                values.cacheRatio ||
-                values.completionRatio ||
-                values.imageRatio ||
-                values.audioRatio ||
-                values.audioCompletionRatio))
+              (pricingMode === 'per-token' &&
+                (values.ratio ||
+                  values.cacheRatio ||
+                  values.completionRatio ||
+                  values.imageRatio ||
+                  values.audioRatio ||
+                  values.audioCompletionRatio)))
 
           // Always process system settings updates if we have modelSettings
           // This ensures we can remove stale entries even when clearing all pricing fields
@@ -716,6 +846,9 @@ export function ModelMutateDrawer({
       loadedPricingName,
       modelSettings,
       updateOption,
+      groupPricingEnabled,
+      groupPriceRows,
+      t,
     ]
   )
 
@@ -987,30 +1120,155 @@ export function ModelMutateDrawer({
                 {t('Pricing Configuration')}
               </h3>
 
-              <div className='space-y-4'>
-                <Label>{t('Pricing mode')}</Label>
-                <RadioGroup
-                  value={pricingMode}
-                  onValueChange={(value) =>
-                    setPricingMode(value as PricingMode)
-                  }
-                >
-                  <div className='flex items-center space-x-2'>
-                    <RadioGroupItem value='per-token' id='per-token' />
-                    <Label htmlFor='per-token' className='font-normal'>
-                      {t('Per-token (ratio based)')}
-                    </Label>
-                  </div>
-                  <div className='flex items-center space-x-2'>
-                    <RadioGroupItem value='per-request' id='per-request' />
-                    <Label htmlFor='per-request' className='font-normal'>
-                      {t('Per-request (fixed price)')}
-                    </Label>
-                  </div>
-                </RadioGroup>
-              </div>
+              <FormField
+                control={form.control}
+                name='name_rule'
+                render={({ field }) => (
+                  <FormItem className={sideDrawerSwitchItemClassName()}>
+                    <div className='flex flex-col gap-0.5'>
+                      <FormLabel className='text-base'>
+                        {t('分组分别定价')}
+                      </FormLabel>
+                      <FormDescription>
+                        {field.value !== NAME_RULE_EXACT
+                          ? t(
+                              '仅支持精确匹配的模型。当前匹配规则不是精确匹配，请先改为精确匹配。'
+                            )
+                          : t(
+                              '为每个用户分组单独设置价格，未设置的分组对该模型不可用。开启后不再使用下方的统一价格与「分组与模型定价」页面的分组倍率。'
+                            )}
+                      </FormDescription>
+                    </div>
+                    <FormControl>
+                      <Switch
+                        checked={groupPricingEnabled}
+                        disabled={field.value !== NAME_RULE_EXACT}
+                        onCheckedChange={(checked) => {
+                          setGroupPricingEnabled(checked)
+                          if (checked && groupPriceRows.length === 0) {
+                            setGroupPriceRows(
+                              toGroupPriceRows(undefined, groupNames)
+                            )
+                          }
+                        }}
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
 
-              {pricingMode === 'per-request' ? (
+              {groupPricingEnabled && (
+                <div className='space-y-3'>
+                  {groupNames.length === 0 ? (
+                    <p className='text-muted-foreground text-sm'>
+                      {t(
+                        '尚未配置任何分组，请先在「分组与模型定价」页面添加分组。'
+                      )}
+                    </p>
+                  ) : (
+                    <div className='space-y-2'>
+                      <div className='grid grid-cols-[1fr_1fr_1fr_1fr] gap-2 text-xs font-medium text-muted-foreground'>
+                        <span>{t('分组')}</span>
+                        <span>{t('按次价格 (USD)')}</span>
+                        <span>{t('Model ratio')}</span>
+                        <span>{t('Completion ratio')}</span>
+                      </div>
+                      {groupPriceRows.map((row) => (
+                        <div
+                          key={row.groupName}
+                          className='grid grid-cols-[1fr_1fr_1fr_1fr] items-center gap-2'
+                        >
+                          <span className='text-sm font-medium'>
+                            {row.groupName}
+                          </span>
+                          <Input
+                            type='text'
+                            placeholder='0.01'
+                            value={row.modelPrice}
+                            onChange={(e) => {
+                              const value = e.target.value
+                              if (!validateNumber(value)) return
+                              setGroupPriceRows((prev) =>
+                                prev.map((r) =>
+                                  r.groupName === row.groupName
+                                    ? { ...r, modelPrice: value }
+                                    : r
+                                )
+                              )
+                            }}
+                          />
+                          <Input
+                            type='text'
+                            placeholder='1.0'
+                            disabled={row.modelPrice.trim() !== ''}
+                            value={row.modelRatio}
+                            onChange={(e) => {
+                              const value = e.target.value
+                              if (!validateNumber(value)) return
+                              setGroupPriceRows((prev) =>
+                                prev.map((r) =>
+                                  r.groupName === row.groupName
+                                    ? { ...r, modelRatio: value }
+                                    : r
+                                )
+                              )
+                            }}
+                          />
+                          <Input
+                            type='text'
+                            placeholder='1.0'
+                            disabled={row.modelPrice.trim() !== ''}
+                            value={row.completionRatio}
+                            onChange={(e) => {
+                              const value = e.target.value
+                              if (!validateNumber(value)) return
+                              setGroupPriceRows((prev) =>
+                                prev.map((r) =>
+                                  r.groupName === row.groupName
+                                    ? { ...r, completionRatio: value }
+                                    : r
+                                )
+                              )
+                            }}
+                          />
+                        </div>
+                      ))}
+                      <p className='text-muted-foreground text-xs'>
+                        {t(
+                          '填写「按次价格」将忽略该分组的倍率字段，与全局定价的固定价优先规则一致。留空整行表示该分组不可用该模型。'
+                        )}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!groupPricingEnabled && (
+                <>
+                  <div className='space-y-4'>
+                    <Label>{t('Pricing mode')}</Label>
+                    <RadioGroup
+                      value={pricingMode}
+                      onValueChange={(value) =>
+                        setPricingMode(value as PricingMode)
+                      }
+                    >
+                      <div className='flex items-center space-x-2'>
+                        <RadioGroupItem value='per-token' id='per-token' />
+                        <Label htmlFor='per-token' className='font-normal'>
+                          {t('Per-token (ratio based)')}
+                        </Label>
+                      </div>
+                      <div className='flex items-center space-x-2'>
+                        <RadioGroupItem value='per-request' id='per-request' />
+                        <Label htmlFor='per-request' className='font-normal'>
+                          {t('Per-request (fixed price)')}
+                        </Label>
+                      </div>
+                    </RadioGroup>
+                  </div>
+
+                  {pricingMode === 'per-request' ? (
                 <FormField
                   control={form.control}
                   name='price'
@@ -1320,6 +1578,8 @@ export function ModelMutateDrawer({
                       />
                     </CollapsibleContent>
                   </Collapsible>
+                </>
+              )}
                 </>
               )}
             </SideDrawerSection>
