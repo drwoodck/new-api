@@ -42,12 +42,19 @@ import {
   useUpdateCanvasCatalogModel,
 } from '../hooks/use-canvas-catalog-mutations'
 import { useContractStats } from '../hooks/use-contract-stats'
+import { SchemaOverrideEditor } from './schema-override/schema-override-editor'
 import type { CanvasCatalogModel } from '../types'
 
 type CanvasCatalogFormDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   currentModel?: CanvasCatalogModel | null
+  // Set when opened from the "未配置" overview tab's "配置画布参数" action:
+  // the relay model name is already known and fixed (it's the join key with
+  // abilities), so the field is pre-filled and locked rather than left for
+  // the admin to retype and risk a typo that silently creates an unrelated
+  // entry instead of configuring this one.
+  prefillRemoteId?: string
 }
 
 const FORM_ID = 'canvas-catalog-mutate-form'
@@ -118,6 +125,7 @@ export function CanvasCatalogFormDialog({
   open,
   onOpenChange,
   currentModel,
+  prefillRemoteId,
 }: CanvasCatalogFormDialogProps) {
   const { t } = useTranslation()
   const isEdit = Boolean(currentModel?.id)
@@ -166,10 +174,10 @@ export function CanvasCatalogFormDialog({
         sort_order: currentModel.sort_order ?? 0,
       })
     } else if (open && !isEdit) {
-      form.reset(EMPTY_VALUES)
+      form.reset({ ...EMPTY_VALUES, remote_id: prefillRemoteId || '' })
       contractManuallyEdited.current = false
     }
-  }, [open, isEdit, currentModel, form])
+  }, [open, isEdit, currentModel, prefillRemoteId, form])
 
   const onSubmit = async (values: FormValues) => {
     setIsSaving(true)
@@ -237,10 +245,16 @@ export function CanvasCatalogFormDialog({
               <FormItem>
                 <FormLabel>{t('Remote ID *')}</FormLabel>
                 <FormControl>
-                  <Input placeholder='sd5-seedance-2.0' {...field} />
+                  <Input
+                    placeholder='sd5-seedance-2.0'
+                    disabled={!isEdit && Boolean(prefillRemoteId)}
+                    {...field}
+                  />
                 </FormControl>
                 <FormDescription>
-                  {t('对应上游 API 实际使用的模型标识')}
+                  {!isEdit && prefillRemoteId
+                    ? t('从「未配置」列表打开,已按该模型在中转站的名称锁定')
+                    : t('对应上游 API 实际使用的模型标识')}
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -411,20 +425,9 @@ export function CanvasCatalogFormDialog({
             rules={{ validate: validateOptionalJson }}
             render={({ field }) => (
               <FormItem>
-                <FormLabel>{t('Schema Override (JSON, 仅异形模型需要)')}</FormLabel>
                 <FormControl>
-                  <Textarea
-                    rows={4}
-                    className='font-mono text-xs'
-                    placeholder='{"endpoint_path": "/v1/videos", ...}'
-                    {...field}
-                  />
+                  <SchemaOverrideEditor value={field.value} onChange={field.onChange} />
                 </FormControl>
-                <FormDescription>
-                  {t(
-                    '留空则走 contract 指定的统一契约。此处只校验合法 JSON,内容是否符合画布词汇表由画布客户端逐条校验,填错会被跳过而非报错。'
-                  )}
-                </FormDescription>
                 <FormMessage />
               </FormItem>
             )}
