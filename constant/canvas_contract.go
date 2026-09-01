@@ -23,3 +23,16 @@ func ContractForCapability(capability string) (string, bool) {
 	contract, ok := capabilityToContract[capability]
 	return contract, ok
 }
+
+// IsSupportedContract 判断某个 contract 字符串是否在画布客户端支持的清单内 ——
+// 即 capabilityToContract 的值集合,不是键集合。用于目录条目"画布是否真的能用
+// 这一条"的判定(未知 contract 画布会把整条目录条目跳过,见 sync/catalog.rs 的
+// UnknownContract 分支),不要为这个判断另建一份契约常量,两份清单迟早会漏同步。
+func IsSupportedContract(contract string) bool {
+	for _, c := range capabilityToContract {
+		if c == contract {
+			return true
+		}
+	}
+	return false
+}

@@ -1,11 +1,13 @@
 package controller
 
 import (
+	"sort"
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -152,4 +154,142 @@ func DeleteCanvasCatalogModelAdmin(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, nil)
+}
+
+// canvasCatalogOverviewRow 是目录总览视图的一行:一个中转站已启用模型,
+// 关联它(可能没有的)models 行与(可能没有的)canvas_catalog_model 行。
+type canvasCatalogOverviewRow struct {
+	ModelName           string                            `json:"model_name"`
+	ModelID             int                               `json:"model_id"`
+	CatalogID           int                               `json:"catalog_id"`
+	DisplayName         string                            `json:"display_name"`
+	Contract            string                            `json:"contract"`
+	Capabilities        string                            `json:"capabilities"`
+	CatalogEnabled      bool                              `json:"catalog_enabled"`
+	ModelStatus         int                               `json:"model_status"`
+	Ready               bool                              `json:"ready"`
+	GroupPricingEnabled bool                              `json:"group_pricing_enabled"`
+	GroupPrices         []canvasCatalogOverviewGroupPrice `json:"group_prices"`
+}
+
+type canvasCatalogOverviewGroupPrice struct {
+	GroupName string   `json:"group_name"`
+	QuotaType int      `json:"quota_type"`
+	Price     *float64 `json:"price"`
+}
+
+// buildOverviewGroupPrices 对一个模型算出它在**全部**已知分组上的价格。
+// 全局倍率/价格与分组价格表都已由调用方一次性拉好(见 GetCanvasCatalogOverviewAdmin),
+// 这里只做纯内存换算 —— 不要在这个函数里查库,否则 N 个模型 × M 个分组就是
+// N×M 次查询。
+func buildOverviewGroupPrices(
+	modelName string,
+	groupPricingEnabled bool,
+	groupPrices map[string]model.ModelGroupPrice,
+	groupNames []string,
+) []canvasCatalogOverviewGroupPrice {
+	out := make([]canvasCatalogOverviewGroupPrice, 0, len(groupNames))
+	for _, groupName := range groupNames {
+		resolved := model.ResolveGroupPriceFromPreloaded(modelName, groupName, groupPricingEnabled, groupPrices)
+		row := canvasCatalogOverviewGroupPrice{GroupName: groupName, QuotaType: resolved.QuotaType}
+		if resolved.Available {
+			price := resolved.ModelPrice
+			if resolved.QuotaType == 0 {
+				// 按 token 倍率计费没有一个"每次调用多少钱"的单一数字 ——
+				// 展示 ModelRatio(与「分组与模型定价」页面展示的口径一致),
+				// 而不是编一个虚假的按次价格。
+				price = resolved.ModelRatio
+			}
+			row.Price = &price
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// GetCanvasCatalogOverviewAdmin 返回中转站全部已启用模型与画布目录配置状态的
+// 关联视图,供管理端"已配置完成 / 未配置"两页分类使用。
+//
+// 与 GetAllCanvasCatalogModelsAdmin(现有的目录行 CRUD 列表)刻意分开 ——
+// 后者的响应形状被编辑表单直接消费,改它的形状会牵动那个表单;这个总览
+// 视图是新的独立读接口,不复用也不改造现有接口。
+//
+// /api/canvas/catalog 的下发内容不受这个接口影响 —— 它仍然只读
+// canvas_catalog_model 表,未配置模型只存在于这个管理端视图里。
+func GetCanvasCatalogOverviewAdmin(c *gin.Context) {
+	enabledNames := model.GetEnabledModels()
+
+	var modelRows []model.Model
+	if err := model.DB.Find(&modelRows).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	modelByName := make(map[string]model.Model, len(modelRows))
+	for _, m := range modelRows {
+		modelByName[m.ModelName] = m
+	}
+
+	catalogRows, err := model.GetAllCanvasCatalogModelsAdmin()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	catalogByRemoteID := make(map[string]model.CanvasCatalogModel, len(catalogRows))
+	for _, cr := range catalogRows {
+		catalogByRemoteID[cr.RemoteID] = cr
+	}
+
+	allGroupPrices, err := model.GetAllModelGroupPrices()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	groupRatios := ratio_setting.GetGroupRatioCopy()
+	groupNames := make([]string, 0, len(groupRatios))
+	for name := range groupRatios {
+		groupNames = append(groupNames, name)
+	}
+	sort.Strings(groupNames)
+
+	// 已启用模型名集合可能不完整覆盖"值得在总览里出现"的名字 —— 一个模型
+	// 已经建了目录条目,但因渠道停用/删除暂时不在 abilities 里,不该从总览
+	// 消失(否则运营方会看到一条自己配过的目录条目突然凭空不见)。取两者并集。
+	names := make(map[string]struct{}, len(enabledNames)+len(catalogRows))
+	for _, n := range enabledNames {
+		names[n] = struct{}{}
+	}
+	for _, cr := range catalogRows {
+		names[cr.RemoteID] = struct{}{}
+	}
+
+	rows := make([]canvasCatalogOverviewRow, 0, len(names))
+	for name := range names {
+		mm, hasModel := modelByName[name]
+		cr, hasCatalog := catalogByRemoteID[name]
+
+		row := canvasCatalogOverviewRow{ModelName: name}
+		if hasModel {
+			row.ModelID = mm.Id
+			row.ModelStatus = mm.Status
+		}
+		if hasCatalog {
+			row.CatalogID = cr.Id
+			row.DisplayName = cr.DisplayName
+			row.Contract = cr.Contract
+			row.Capabilities = cr.Capabilities
+			row.CatalogEnabled = cr.IsEnabled()
+			row.Ready = model.IsCanvasReady(&cr)
+		}
+
+		groupPricingEnabled := hasModel && mm.GroupPricingEnabled
+		row.GroupPricingEnabled = groupPricingEnabled
+		row.GroupPrices = buildOverviewGroupPrices(name, groupPricingEnabled, allGroupPrices[name], groupNames)
+
+		rows = append(rows, row)
+	}
+
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ModelName < rows[j].ModelName })
+
+	common.ApiSuccess(c, rows)
 }

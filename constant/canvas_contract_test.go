@@ -28,3 +28,23 @@ func TestContractForCapabilityUnknownReturnsFalse(t *testing.T) {
 		t.Errorf("expected empty contract on miss, got %q", got)
 	}
 }
+
+func TestIsSupportedContractKnownValues(t *testing.T) {
+	for _, contract := range []string{"relay_video_async_v1", "relay_image_async_v1"} {
+		if !IsSupportedContract(contract) {
+			t.Errorf("contract %q: expected supported", contract)
+		}
+	}
+}
+
+// 目录管理页的"已配置完成 vs 未配置"分流靠这个函数判断契约是否画布真能用 ——
+// 一个管理员手填的、画布不认识的 contract 必须判为不支持,否则目录总览会把
+// 一个"保存后请求会被画布整条跳过"的条目错误归到"已配置完成"页。
+func TestIsSupportedContractUnknownValue(t *testing.T) {
+	if IsSupportedContract("relay_audio_async_v1") {
+		t.Fatalf("expected unsupported contract to return false")
+	}
+	if IsSupportedContract("") {
+		t.Fatalf("expected empty contract to return false")
+	}
+}

@@ -1,15 +1,19 @@
 package model
 
 import (
+	"strings"
+
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+
 	"gorm.io/gorm"
 )
 
 type CanvasCatalogModel struct {
-	Id              int            `json:"id"`
-	RemoteID        string         `json:"remote_id" gorm:"size:128;not null;index"`
-	DisplayName     string         `json:"display_name" gorm:"size:256;not null"`
-	Capabilities    string         `json:"capabilities" gorm:"size:256;not null"`
+	Id           int    `json:"id"`
+	RemoteID     string `json:"remote_id" gorm:"size:128;not null;index"`
+	DisplayName  string `json:"display_name" gorm:"size:256;not null"`
+	Capabilities string `json:"capabilities" gorm:"size:256;not null"`
 	// Enabled 必须是指针。它带 default:true,而 GORM 在 Create 时会把 bool 零值
 	// 当成「未设置」交给数据库默认值 —— 实测三种写法(裸 Create、Select("*")、
 	// 点名 Select)生成的 SQL 都是 `enabled` VALUES (true),即 enabled=false
@@ -17,24 +21,46 @@ type CanvasCatalogModel struct {
 	// 已上架的条目,而条目一上架客户端立刻能看到并下单。
 	// 指针区分得开三态:nil = 未提供(取默认 true)、&false、&true。
 	// 读取时一律走 IsEnabled(),不要直接解引用。
-	Enabled         *bool          `json:"enabled" gorm:"default:true"`
-	Description     string         `json:"description,omitempty" gorm:"type:text"`
-	Pricing         string         `json:"pricing,omitempty" gorm:"size:128"`
-	Limitations     string         `json:"limitations,omitempty" gorm:"type:text"`
-	Contract        string         `json:"contract" gorm:"size:64;not null"`
-	ParamSchema     string         `json:"param_schema,omitempty" gorm:"type:text"`
-	SchemaOverride  string         `json:"schema_override,omitempty" gorm:"type:text"`
-	RequiresVocab   int            `json:"requires_vocab" gorm:"default:1"`
-	SortOrder       int            `json:"sort_order" gorm:"default:0"`
-	CreatedTime     int64          `json:"created_time" gorm:"bigint"`
-	UpdatedTime     int64          `json:"updated_time" gorm:"bigint"`
-	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"`
+	Enabled        *bool          `json:"enabled" gorm:"default:true"`
+	Description    string         `json:"description,omitempty" gorm:"type:text"`
+	Pricing        string         `json:"pricing,omitempty" gorm:"size:128"`
+	Limitations    string         `json:"limitations,omitempty" gorm:"type:text"`
+	Contract       string         `json:"contract" gorm:"size:64;not null"`
+	ParamSchema    string         `json:"param_schema,omitempty" gorm:"type:text"`
+	SchemaOverride string         `json:"schema_override,omitempty" gorm:"type:text"`
+	RequiresVocab  int            `json:"requires_vocab" gorm:"default:1"`
+	SortOrder      int            `json:"sort_order" gorm:"default:0"`
+	CreatedTime    int64          `json:"created_time" gorm:"bigint"`
+	UpdatedTime    int64          `json:"updated_time" gorm:"bigint"`
+	DeletedAt      gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 // IsEnabled 读取启用状态。Enabled 是指针(见字段注释),nil 表示调用方未提供,
 // 按 default:true 的语义视为启用。所有判断都该走这里,不要直接解引用。
 func (c *CanvasCatalogModel) IsEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
+}
+
+// IsCanvasReady 判定这条目录条目是不是画布客户端真正能用的("已配置完成"页
+// vs "未配置"页的分流依据)——三项都是画布客户端不会把这一条整条跳过的最低
+// 要求(见 sync/catalog.rs 的 apply_remote_catalog:未知 contract → 整条跳过;
+// display_name 空 → 下拉里没名字可选):
+//  1. contract 非空且在画布支持清单内;
+//  2. display_name 非空。
+//
+// 刻意不看价格:契约可用性与"配没配价"是两件独立的事。没配价的模型仍算
+// ready(仍在"已配置"页,只是分组价格列显示缺失),否则改个价会让模型在
+// 两页之间跳来跳去,读起来莫名其妙。也不看 Enabled(软下线状态)——
+// 一个被运营方停用的条目依然是"已配置完成"过的,停用是它自己的独立状态,
+// 不是"从未配置"。
+func IsCanvasReady(m *CanvasCatalogModel) bool {
+	if m == nil {
+		return false
+	}
+	if strings.TrimSpace(m.DisplayName) == "" {
+		return false
+	}
+	return constant.IsSupportedContract(m.Contract)
 }
 
 func (c *CanvasCatalogModel) Insert() error {

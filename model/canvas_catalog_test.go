@@ -1,11 +1,11 @@
 package model
 
 import (
-	"testing"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"testing"
 )
 
 // setupCanvasCatalogTestDB 给每个测试一个**独立**的内存库。
@@ -43,13 +43,13 @@ func setupCanvasCatalogTestDB(t *testing.T) {
 func TestCanvasCatalogInsert(t *testing.T) {
 	setupCanvasCatalogTestDB(t)
 	c := &CanvasCatalogModel{
-		RemoteID: "test-model-1",
-		DisplayName: "Test Model",
-		Capabilities: "video_gen",
-		Enabled: boolPtr(true),
-		Contract: "relay_video_async_v1",
+		RemoteID:      "test-model-1",
+		DisplayName:   "Test Model",
+		Capabilities:  "video_gen",
+		Enabled:       boolPtr(true),
+		Contract:      "relay_video_async_v1",
 		RequiresVocab: 1,
-		SortOrder: 100,
+		SortOrder:     100,
 	}
 	err := c.Insert()
 	require.NoError(t, err)
@@ -157,4 +157,49 @@ func TestGetCanvasCatalogNeverRewritesEnabled(t *testing.T) {
 	assert.True(t, byRemoteID["m1"].IsEnabled(), "m1 存的是 true,必须原样返回")
 	assert.True(t, byRemoteID["m2"].IsEnabled(), "m2 存的是 true,即便某分组用不了它也不能被改成 false")
 	assert.False(t, byRemoteID["m3"].IsEnabled(), "m3 存的是 false,原样返回")
+}
+
+// --- IsCanvasReady ---
+//
+// 判据只看 contract(须在画布支持清单内)与 display_name(非空),不看价格、
+// 不看 Enabled(软下线状态)。这些测试锁的正是"不掺入这两者"这条边界。
+
+func TestIsCanvasReadyNilIsNotReady(t *testing.T) {
+	assert.False(t, IsCanvasReady(nil))
+}
+
+func TestIsCanvasReadyKnownContractAndDisplayNameIsReady(t *testing.T) {
+	m := &CanvasCatalogModel{
+		RemoteID: "m1", DisplayName: "Model 1", Contract: "relay_video_async_v1",
+	}
+	assert.True(t, IsCanvasReady(m))
+}
+
+func TestIsCanvasReadyUnknownContractIsNotReady(t *testing.T) {
+	m := &CanvasCatalogModel{
+		RemoteID: "m1", DisplayName: "Model 1", Contract: "relay_audio_async_v1",
+	}
+	assert.False(t, IsCanvasReady(m), "画布不认识的 contract 保存后请求会被整条跳过,不能算 ready")
+}
+
+func TestIsCanvasReadyEmptyContractIsNotReady(t *testing.T) {
+	m := &CanvasCatalogModel{RemoteID: "m1", DisplayName: "Model 1", Contract: ""}
+	assert.False(t, IsCanvasReady(m))
+}
+
+func TestIsCanvasReadyEmptyDisplayNameIsNotReady(t *testing.T) {
+	m := &CanvasCatalogModel{
+		RemoteID: "m1", DisplayName: "  ", Contract: "relay_video_async_v1",
+	}
+	assert.False(t, IsCanvasReady(m), "空白显示名下拉里没名字可选,不能算 ready")
+}
+
+// 停用(软下线)是条目自己独立的状态,不代表"从未配置" —— 一个被运营方
+// 手动停用的条目依旧是 ready(继续留在"已配置"页,只是置灰/不可新发起)。
+func TestIsCanvasReadyDisabledEntryIsStillReady(t *testing.T) {
+	m := &CanvasCatalogModel{
+		RemoteID: "m1", DisplayName: "Model 1", Contract: "relay_video_async_v1",
+		Enabled: boolPtr(false),
+	}
+	assert.True(t, IsCanvasReady(m))
 }
