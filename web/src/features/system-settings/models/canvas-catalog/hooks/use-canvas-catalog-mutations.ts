@@ -32,6 +32,11 @@ function useInvalidateOnSuccess() {
   return {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['canvas-catalog-models'] })
+      // The overview joins this same table against abilities/models, so a
+      // create/update/delete here always changes which tab a model belongs
+      // in (or its price display) even though this mutation never touches
+      // the overview endpoint directly.
+      queryClient.invalidateQueries({ queryKey: ['canvas-catalog-overview'] })
     },
   }
 }

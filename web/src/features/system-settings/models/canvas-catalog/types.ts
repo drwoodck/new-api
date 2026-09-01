@@ -34,4 +34,33 @@ export type CanvasCatalogModel = {
   sort_order: number
   created_time?: number
   updated_time?: number
+  // 派生自 abilities,不是这一行自己存的列;/api/canvas/admin/models 的
+  // GetAllCanvasCatalogModelsAdmin 直接 marshal 这个 struct,该字段 Go 侧
+  // 早已存在(见 controller/canvas_catalog.go 的 GroupVisible),这里之前漏加。
+  group_visible?: boolean
+}
+
+// 对应 Go 端 controller.canvasCatalogOverviewRow (controller/canvas_catalog_admin.go)。
+// GET /api/canvas/admin/catalog-overview 的一行:中转站一个已启用模型,
+// 关联它(可能没有的)models 行与(可能没有的)canvas_catalog_model 行。
+export type CanvasCatalogOverviewRow = {
+  model_name: string
+  model_id: number
+  catalog_id: number
+  display_name: string
+  contract: string
+  capabilities: string
+  catalog_enabled: boolean
+  model_status: number
+  ready: boolean
+  group_pricing_enabled: boolean
+  group_prices: CanvasCatalogOverviewGroupPrice[]
+}
+
+export type CanvasCatalogOverviewGroupPrice = {
+  group_name: string
+  quota_type: number
+  // null = 分别定价模式下这个分组没配置价格(不可用)。区分 null 与 0 ——
+  // 0 是"这个分组免费",null 是"没配置",两者语义不同,渲染时不能混用。
+  price: number | null
 }

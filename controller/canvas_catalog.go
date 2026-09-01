@@ -11,6 +11,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -49,6 +51,29 @@ type canvasCatalogWireModel struct {
 	// 画布当前还不读这个字段 —— serde 忽略未知字段,所以下发它是向后兼容的,
 	// 消费留给后续任务。
 	GroupVisible bool `json:"group_visible"`
+
+	// GroupPrice 是已经按调用者分组算好的价格 —— 只下发调用者自己那一个分组的
+	// 数字,不下发其它分组的价格(用户的分组只能看到自己分组的价)。
+	// nil 表示"没有价格信息":取不到有效分组(fail-open,与 GroupVisible 同一
+	// 处理原则)、或分别定价模式下这个分组没有配置价格。**刻意不用 0 表示
+	// 不可用**——0 会被画布当"免费"处理并放过余额闸门,而"没有价格信息"与
+	// "免费"是两件完全不同的事。
+	GroupPrice *canvasGroupPrice `json:"group_price"`
+}
+
+// canvasGroupPrice 字段命名与形状对齐画布已有的 relay/pricing.rs 的
+// PricingItem,让画布侧能直接复用已有的预估公式(src/lib/costEstimate.ts),
+// 不需要为这个新字段单独写一套。
+type canvasGroupPrice struct {
+	// QuotaType: 0 = 按 token 倍率计费,1 = 按次/按量固定价。
+	QuotaType        int      `json:"quota_type"`
+	ModelPrice       float64  `json:"model_price"`
+	ModelRatio       float64  `json:"model_ratio"`
+	CompletionRatio  float64  `json:"completion_ratio"`
+	VideoSecondPrice *float64 `json:"video_second_price,omitempty"`
+	// GroupRatioApplied:统一模式下是该分组的 GroupRatio;分别定价模式下恒为 1
+	// (分别定价的数字本身就是最终价,不再叠乘倍率——ResolveGroupPrice 的既有约定)。
+	GroupRatioApplied float64 `json:"group_ratio_applied"`
 }
 
 // parseCapabilities 兼容管理员在文本框里的几种写法:JSON 数组
@@ -80,11 +105,54 @@ func parseCapabilities(raw string) []string {
 	return out
 }
 
+// resolveCanvasGroupPrice 算出某个 remote_id(= 计费用的字面模型名,两者
+// 本就是同一个字符串,已核实)在给定分组下的价格,供目录下发使用。
+// group 为空表示"没有分组信息"(取不到有效分组),此时 fail-open 返回 nil ——
+// 与 GroupVisible 同一处理原则:宁可不下发价格,也不能下发一个错误的 0。
+func resolveCanvasGroupPrice(remoteID, group string) *canvasGroupPrice {
+	if group == "" {
+		return nil
+	}
+	// 视频按秒计费与分组分别定价互斥、按秒计费为准(ModelPriceHelperPerCall
+	// 的既有规则),这里同样优先处理:按秒计费的价格对所有分组都一样,
+	// 不经过 ResolveGroupPrice。
+	if secondPrice, ok := ratio_setting.GetVideoSecondPrice(remoteID); ok {
+		groupRatio := ratio_setting.GetGroupRatio(group)
+		return &canvasGroupPrice{
+			QuotaType:         1,
+			ModelPrice:        secondPrice,
+			VideoSecondPrice:  &secondPrice,
+			GroupRatioApplied: groupRatio,
+		}
+	}
+	resolved, err := model.ResolveGroupPrice(remoteID, group)
+	if err != nil {
+		// 与 abilities 查询失败同一处理:查询失败不等于"这个分组真的不可用",
+		// 判成不可用会让画布把它当成免费/不可用来源,宁可不下发。
+		common.SysError(fmt.Sprintf("解析模型 %s 在分组 %s 下的价格失败,本次目录不下发该条目的价格: %v", remoteID, group, err))
+		return nil
+	}
+	if !resolved.Available {
+		return nil
+	}
+	return &canvasGroupPrice{
+		QuotaType:         resolved.QuotaType,
+		ModelPrice:        resolved.ModelPrice,
+		ModelRatio:        resolved.ModelRatio,
+		CompletionRatio:   resolved.CompletionRatio,
+		GroupRatioApplied: resolved.GroupRatioApplied,
+	}
+}
+
 // toWireModel 把存储格式转成客户端契约格式。
 //
 // groupModels 是调用者分组的可用模型集(nil 表示「不做分组判定」——
 // 取不到有效分组时一律按可见处理,宁可多给也不要把整份目录判成不可见)。
-func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}) canvasCatalogWireModel {
+// group 是调用者的有效分组字符串(空串表示"没有分组信息"),用于算
+// GroupPrice —— 与 groupModels 表达的是同一次"有没有分组信息"判断,
+// 两个参数分开传是因为 GroupVisible 只需要集合、GroupPrice 的计算需要
+// 分组名字符串本身。
+func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, group string) canvasCatalogWireModel {
 	w := canvasCatalogWireModel{
 		RemoteID:      m.RemoteID,
 		DisplayName:   m.DisplayName,
@@ -94,6 +162,7 @@ func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}) c
 		RequiresVocab: m.RequiresVocab,
 		// nil 集合 = 无分组信息 = 不降级任何条目
 		GroupVisible: groupModels == nil,
+		GroupPrice:   resolveCanvasGroupPrice(m.RemoteID, group),
 	}
 	if groupModels != nil {
 		_, w.GroupVisible = groupModels[m.RemoteID]
@@ -173,7 +242,7 @@ func GetCanvasCatalog(c *gin.Context) {
 
 	models := make([]canvasCatalogWireModel, 0, len(rows))
 	for i := range rows {
-		models = append(models, toWireModel(&rows[i], groupModels))
+		models = append(models, toWireModel(&rows[i], groupModels, effectiveGroup))
 	}
 
 	response := gin.H{

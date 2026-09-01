@@ -18,13 +18,23 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 
-import { getCanvasCatalogModels } from '../api'
+import { fetchCanvasCatalogOverview, getCanvasCatalogModels } from '../api'
 
 export function useCanvasCatalogModels() {
   return useQuery({
     queryKey: ['canvas-catalog-models'],
     queryFn: async () => {
       const res = await getCanvasCatalogModels()
+      return res.data ?? []
+    },
+  })
+}
+
+export function useCanvasCatalogOverview() {
+  return useQuery({
+    queryKey: ['canvas-catalog-overview'],
+    queryFn: async () => {
+      const res = await fetchCanvasCatalogOverview()
       return res.data ?? []
     },
   })

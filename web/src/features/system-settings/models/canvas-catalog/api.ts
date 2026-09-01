@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 
-import type { CanvasCatalogModel } from './types'
+import type { CanvasCatalogModel, CanvasCatalogOverviewRow } from './types'
 
 interface ApiResponse<T = unknown> {
   success: boolean
@@ -70,5 +70,19 @@ export async function fetchContractStats(): Promise<
   ApiResponse<ContractStatsResponse>
 > {
   const res = await api.get('/api/canvas/admin/contract-stats')
+  return res.data
+}
+
+/**
+ * All relay-enabled models (whether or not a canvas catalog entry exists yet)
+ * joined against their catalog config and per-group prices. Backs the
+ * "已配置完成 / 未配置" two-tab overview — deliberately a separate read
+ * endpoint from getCanvasCatalogModels, whose response shape the edit form
+ * consumes directly.
+ */
+export async function fetchCanvasCatalogOverview(): Promise<
+  ApiResponse<CanvasCatalogOverviewRow[]>
+> {
+  const res = await api.get('/api/canvas/admin/catalog-overview')
   return res.data
 }
