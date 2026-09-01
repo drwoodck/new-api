@@ -104,20 +104,37 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	textOutTokens := usage.OutputTokenDetails.TextTokens
 	audioInputTokens := usage.InputTokenDetails.AudioTokens
 	audioOutTokens := usage.OutputTokenDetails.AudioTokens
-	groupRatio := ratio_setting.GetGroupRatio(relayInfo.UsingGroup)
-	modelRatio, _, _ := ratio_setting.GetModelRatio(modelName)
 
-	autoGroup, exists := common.GetContextKey(ctx, constant.ContextKeyAutoGroup)
-	if exists {
-		groupRatio = ratio_setting.GetGroupRatio(autoGroup.(string))
-		logger.LogDebug(ctx, "final group ratio: %f", groupRatio)
-		relayInfo.UsingGroup = autoGroup.(string)
+	// 分组分别定价模式下,该模型可能在全局 ModelRatio 表里完全没有条目 ——
+	// controller/relay.go 在这个函数运行之前已经跑过 ModelPriceHelper 并把
+	// 正确解析出的倍率(分别定价或全局,已按分组算好)存进了 relayInfo.PriceData,
+	// 这里必须读那份结果,不能重新查 ratio_setting —— 查到的会是错误数字,
+	// 分别定价模式下甚至可能直接查不到条目。
+	var groupRatio, modelRatio float64
+	if model.IsGroupPricingEnabled(modelName) {
+		groupRatio = relayInfo.PriceData.GroupRatioInfo.GroupRatio
+		modelRatio = relayInfo.PriceData.ModelRatio
+	} else {
+		groupRatio = ratio_setting.GetGroupRatio(relayInfo.UsingGroup)
+		modelRatio, _, _ = ratio_setting.GetModelRatio(modelName)
+
+		autoGroup, exists := common.GetContextKey(ctx, constant.ContextKeyAutoGroup)
+		if exists {
+			groupRatio = ratio_setting.GetGroupRatio(autoGroup.(string))
+			logger.LogDebug(ctx, "final group ratio: %f", groupRatio)
+			relayInfo.UsingGroup = autoGroup.(string)
+		}
 	}
 
 	actualGroupRatio := groupRatio
-	userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup)
-	if ok {
-		actualGroupRatio = userGroupRatio
+	if !model.IsGroupPricingEnabled(modelName) {
+		// user-group 特殊倍率(auto_group 跨组计费)是统一倍率模式下的独立概念,
+		// 分别定价模式下 GroupRatio 已经是最终价的组成部分,不再叠乘任何东西
+		// (ResolveGroupPrice 的既有约定)。
+		userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup)
+		if ok {
+			actualGroupRatio = userGroupRatio
+		}
 	}
 
 	quotaInfo := QuotaInfo{

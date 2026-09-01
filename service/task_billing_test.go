@@ -50,6 +50,13 @@ func TestMain(m *testing.M) {
 		&model.UserSubscription{},
 		&model.SystemTask{},
 		&model.SystemTaskLock{},
+		// 分组分别定价测试需要:model.IsGroupPricingEnabled 读的缓存由
+		// model.RefreshPricing() 刷新,那条路径要查 Ability/Vendor 表;
+		// Model/ModelGroupPrice 是分别定价配置本身的存储。
+		&model.Model{},
+		&model.ModelGroupPrice{},
+		&model.Ability{},
+		&model.Vendor{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -74,6 +81,14 @@ func truncate(t *testing.T) {
 		model.DB.Exec("DELETE FROM user_subscriptions")
 		model.DB.Exec("DELETE FROM system_task_locks")
 		model.DB.Exec("DELETE FROM system_tasks")
+		model.DB.Exec("DELETE FROM models")
+		model.DB.Exec("DELETE FROM model_group_prices")
+		model.DB.Exec("DELETE FROM abilities")
+		model.DB.Exec("DELETE FROM vendors")
+		// 每个用到分组分别定价的测试都会把新建的 Model 行灌进
+		// modelGroupPricingEnabled 缓存,上面几行清完 DB 后必须再刷新一次缓存,
+		// 否则下一个测试会读到上一个测试残留的开关状态(哪怕 DB 里已经没有那行了)。
+		model.RefreshPricing()
 	})
 }
 

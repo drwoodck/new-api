@@ -33,6 +33,25 @@ func modelPriceNotConfiguredError(modelName string, userId int) error {
 	)
 }
 
+// modelGroupPriceNotAvailableError 分别定价模式下,该模型对当前分组没有配置价格。
+// 与 modelPriceNotConfiguredError(全局压根没定价)是不同的失败原因,分开给
+// 提示文案 —— 管理员看到的是"去补哪个分组",不是"这个模型完全没配置"。
+func modelGroupPriceNotAvailableError(modelName, groupName string, userId int) error {
+	if model.IsAdmin(userId) {
+		return fmt.Errorf(
+			"模型 %s 已开启分组分别定价,但分组「%s」尚未配置价格。请在「模型」页面为该模型的这个分组补充价格；"+
+				"Model %s has group-specific pricing enabled, but no price is configured for group %q. "+
+				"Please add a price for this group on the Models page.",
+			modelName, groupName, modelName, groupName,
+		)
+	}
+	return fmt.Errorf(
+		"模型 %s 对您当前的分组不可用，请联系站点管理员；"+
+			"Model %s is not available for your current group. Please contact the site administrator.",
+		modelName, modelName,
+	)
+}
+
 // https://docs.claude.com/en/docs/build-with-claude/prompt-caching#1-hour-cache-duration
 const claudeCacheCreation1hMultiplier = 6 / 3.75
 
@@ -71,13 +90,49 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hostty
 }
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (hosttypes.PriceData, error) {
-	modelPrice, usePrice := ratio_setting.GetModelPrice(info.OriginModelName, false)
-
 	groupRatioInfo := HandleGroupRatio(c, info)
 
 	// Check if this model uses tiered_expr billing
+	//
+	// 必须在检查分组分别定价(IsGroupPricingEnabled)**之前**判断并 return ——
+	// 后者会触发 model.GetPricing() 的整套定价缓存刷新(打 abilities/channels/
+	// vendors 表),tiered_expr 模型不需要也不应该为了判断"要不要走分别定价"
+	// 而承担这次刷新开销。tiered_expr 与分组分别定价互斥、以 tiered_expr 为准
+	// 是既定行为,这个早返回本身就是那条规则的落地,不需要额外读一次分组分别
+	// 定价开关来"确认"冲突再放行——那样反而对每个 tiered_expr 请求都强制刷新
+	// 一次定价缓存,得不偿失,牺牲的只是一条运营方诊断日志。
 	if billing_setting.GetBillingMode(info.OriginModelName) == billing_setting.BillingModeTieredExpr {
 		return modelPriceHelperTiered(c, info, promptTokens, meta, groupRatioInfo)
+	}
+
+	groupPricingEnabled := model.IsGroupPricingEnabled(info.OriginModelName)
+
+	var modelPrice float64
+	var usePrice bool
+	var groupPriceResult model.ResolvedGroupPrice
+	if groupPricingEnabled {
+		var err error
+		groupPriceResult, err = model.ResolveGroupPrice(info.OriginModelName, info.UsingGroup)
+		if err != nil {
+			return hosttypes.PriceData{}, err
+		}
+		if !groupPriceResult.Available {
+			return hosttypes.PriceData{}, modelGroupPriceNotAvailableError(info.OriginModelName, info.UsingGroup, info.UserId)
+		}
+		// 分别定价的数字本身就是最终价,不再叠乘 GroupRatio(ResolveGroupPrice
+		// 已确认的约定)。覆盖到 groupRatioInfo 上,让下面所有既有的
+		// "× groupRatioInfo.GroupRatio" 计算保持不变 —— 不用为分别定价另写
+		// 一套公式。同时清掉 HandleGroupRatio 可能已经算出的 auto_group 跨组
+		// 特殊倍率标记 —— 那是统一倍率模式下的独立概念,分别定价模式下
+		// GroupRatio 已经是最终价的一部分,继续留着 HasSpecialRatio=true 只会让
+		// 日志里的 user_group_ratio 显示一个跟实际扣费无关的旧数字。
+		groupRatioInfo.GroupRatio = groupPriceResult.GroupRatioApplied
+		groupRatioInfo.HasSpecialRatio = false
+		groupRatioInfo.GroupSpecialRatio = -1
+		usePrice = groupPriceResult.QuotaType == 1
+		modelPrice = groupPriceResult.ModelPrice
+	} else {
+		modelPrice, usePrice = ratio_setting.GetModelPrice(info.OriginModelName, false)
 	}
 
 	var preConsumedQuota int
@@ -96,19 +151,28 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		if meta.MaxTokens != 0 {
 			preConsumedTokens += meta.MaxTokens
 		}
-		var success bool
-		var matchName string
-		modelRatio, success, matchName = ratio_setting.GetModelRatio(info.OriginModelName)
-		if !success {
-			acceptUnsetRatio := false
-			if info.UserSetting.AcceptUnsetRatioModel {
-				acceptUnsetRatio = true
+		if groupPricingEnabled {
+			// Available 已在上面确认过;分别定价模式下不存在"该分组没配置
+			// 倍率但仍放行"的逃生舱 —— AcceptUnsetRatioModel 是给"全局压根
+			// 没定价"这个不同问题用的,分组分别定价开着就意味着这个模型的
+			// 价格权威来源是 model_group_price,不回退到全局 ratio 表。
+			modelRatio = groupPriceResult.ModelRatio
+			completionRatio = groupPriceResult.CompletionRatio
+		} else {
+			var success bool
+			var matchName string
+			modelRatio, success, matchName = ratio_setting.GetModelRatio(info.OriginModelName)
+			if !success {
+				acceptUnsetRatio := false
+				if info.UserSetting.AcceptUnsetRatioModel {
+					acceptUnsetRatio = true
+				}
+				if !acceptUnsetRatio {
+					return hosttypes.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
+				}
 			}
-			if !acceptUnsetRatio {
-				return hosttypes.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
-			}
+			completionRatio = ratio_setting.GetCompletionRatio(info.OriginModelName)
 		}
-		completionRatio = ratio_setting.GetCompletionRatio(info.OriginModelName)
 		cacheRatio, _ = ratio_setting.GetCacheRatio(info.OriginModelName)
 		cacheCreationRatio, _ = ratio_setting.GetCreateCacheRatio(info.OriginModelName)
 		cacheCreationRatio5m = cacheCreationRatio
@@ -189,29 +253,60 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 
 	// 视频按秒计费的模型只需配置每秒单价，不应再要求额外的按次价格/倍率。
 	// 真正的额度计算（单价 × 时长）在 RelayTaskSubmit 的按秒计费步骤完成。
+	//
+	// 必须在检查分组分别定价(IsGroupPricingEnabled)**之前**判断并 return ——
+	// 理由同 ModelPriceHelper 里 tiered_expr 分支的注释:IsGroupPricingEnabled
+	// 会触发一次 model.GetPricing() 缓存刷新,按秒计费的模型不该为了判断
+	// "是否也开了分组分别定价"而承担这次刷新开销。代价是放弃两者冲突时的
+	// 一条运营方诊断日志,按秒计费依然照常为准。
 	if secondPrice, ok := ratio_setting.GetVideoSecondPrice(info.OriginModelName); ok {
 		return buildVideoSecondPriceData(secondPrice, groupRatioInfo)
 	}
 
-	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
-	usePrice := success
+	groupPricingEnabled := model.IsGroupPricingEnabled(info.OriginModelName)
+
+	var modelPrice float64
+	var usePrice bool
 	var modelRatio float64
 
-	if !success {
-		defaultPrice, ok := ratio_setting.GetDefaultModelPriceMap()[info.OriginModelName]
-		if ok {
-			modelPrice = defaultPrice
-			usePrice = true
+	if groupPricingEnabled {
+		groupPriceResult, err := model.ResolveGroupPrice(info.OriginModelName, info.UsingGroup)
+		if err != nil {
+			return hosttypes.PriceData{}, err
+		}
+		if !groupPriceResult.Available {
+			return hosttypes.PriceData{}, modelGroupPriceNotAvailableError(info.OriginModelName, info.UsingGroup, info.UserId)
+		}
+		groupRatioInfo.GroupRatio = groupPriceResult.GroupRatioApplied
+		groupRatioInfo.HasSpecialRatio = false
+		groupRatioInfo.GroupSpecialRatio = -1
+		usePrice = groupPriceResult.QuotaType == 1
+		if usePrice {
+			modelPrice = groupPriceResult.ModelPrice
 		} else {
-			var ratioSuccess bool
-			var matchName string
-			modelRatio, ratioSuccess, matchName = ratio_setting.GetModelRatio(info.OriginModelName)
-			acceptUnsetRatio := false
-			if info.UserSetting.AcceptUnsetRatioModel {
-				acceptUnsetRatio = true
-			}
-			if !ratioSuccess && !acceptUnsetRatio {
-				return hosttypes.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
+			modelRatio = groupPriceResult.ModelRatio
+		}
+	} else {
+		var success bool
+		modelPrice, success = ratio_setting.GetModelPrice(info.OriginModelName, true)
+		usePrice = success
+
+		if !success {
+			defaultPrice, ok := ratio_setting.GetDefaultModelPriceMap()[info.OriginModelName]
+			if ok {
+				modelPrice = defaultPrice
+				usePrice = true
+			} else {
+				var ratioSuccess bool
+				var matchName string
+				modelRatio, ratioSuccess, matchName = ratio_setting.GetModelRatio(info.OriginModelName)
+				acceptUnsetRatio := false
+				if info.UserSetting.AcceptUnsetRatioModel {
+					acceptUnsetRatio = true
+				}
+				if !ratioSuccess && !acceptUnsetRatio {
+					return hosttypes.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
+				}
 			}
 		}
 	}

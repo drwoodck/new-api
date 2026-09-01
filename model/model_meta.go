@@ -39,6 +39,17 @@ type Model struct {
 	EnableGroups  []string       `json:"enable_groups,omitempty" gorm:"-"`
 	QuotaTypes    []int          `json:"quota_types,omitempty" gorm:"-"`
 	NameRule      int            `json:"name_rule" gorm:"default:0"`
+	// GroupPricingEnabled 打开后,该模型的价格不再走全局 ModelRatio/ModelPrice ×
+	// GroupRatio,而是逐分组在 model_group_price 表里查(见 ResolveGroupPrice)。
+	// 用显式列而非"表里有没有行"隐式判断:后者无法区分"统一模式"与
+	// "分别模式但配置未完成、所有分组都不可用"。
+	GroupPricingEnabled bool `json:"group_pricing_enabled" gorm:"default:false"`
+	// GroupPrices 是 GroupPricingEnabled=true 时的逐分组价格,不落在 models 表 ——
+	// 真正的存储在 model_group_price 表(见 ModelGroupPrice)。这里只是请求/响应
+	// 的传输字段,与 BoundChannels/EnableGroups 同一种"gorm:- 附加字段"模式:
+	// create/update 时从请求体读出、写完模型行后调 ReplaceModelGroupPrices 落库;
+	// 读取时由 enrichModels 从 model_group_price 表批量查回填。
+	GroupPrices []ModelGroupPrice `json:"group_prices,omitempty" gorm:"-"`
 
 	MatchedModels []string `json:"matched_models,omitempty" gorm:"-"`
 	MatchedCount  int      `json:"matched_count,omitempty" gorm:"-"`
@@ -78,7 +89,7 @@ func (mi *Model) Update() error {
 	mi.UpdatedTime = common.GetTimestamp()
 	// 使用 Select 强制更新所有字段，包括零值
 	return DB.Model(&Model{}).Where("id = ?", mi.Id).
-		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
+		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "group_pricing_enabled", "updated_time").
 		Updates(mi).Error
 }
 

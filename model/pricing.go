@@ -53,10 +53,11 @@ var (
 	lastGetPricingTime   time.Time
 	updatePricingLock    sync.Mutex
 
-	// 缓存映射：模型名 -> 启用分组 / 计费类型
-	modelEnableGroups     = make(map[string][]string)
-	modelQuotaTypeMap     = make(map[string]int)
-	modelEnableGroupsLock = sync.RWMutex{}
+	// 缓存映射：模型名 -> 启用分组 / 计费类型 / 是否开启分组分别定价
+	modelEnableGroups        = make(map[string][]string)
+	modelQuotaTypeMap        = make(map[string]int)
+	modelGroupPricingEnabled = make(map[string]bool)
+	modelEnableGroupsLock    = sync.RWMutex{}
 )
 
 var (
@@ -428,6 +429,15 @@ func updatePricing() {
 	for _, p := range pricingMap {
 		modelEnableGroups[p.ModelName] = p.EnableGroup
 		modelQuotaTypeMap[p.ModelName] = p.QuotaType
+	}
+	// 分组分别定价开关取自 metaMap(全部有模型行的名字),不是 pricingMap
+	// (那份按 Status==1 过滤过)——计费热路径可能对一个已停用模型的调用做出
+	// 判断,这个标志必须仍然可查,不能因为模型被禁用就从缓存里消失。
+	modelGroupPricingEnabled = make(map[string]bool, len(metaMap))
+	for name, meta := range metaMap {
+		if meta.GroupPricingEnabled {
+			modelGroupPricingEnabled[name] = true
+		}
 	}
 	modelEnableGroupsLock.Unlock()
 

@@ -283,12 +283,26 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 // RecalculateTaskQuotaByTokens 根据实际 token 消耗重新计费（异步差额结算）。
 // 当任务成功且返回了 totalTokens 时，根据模型倍率和分组倍率重新计算实际扣费额度，
 // 与预扣费的差额进行补扣或退还。支持钱包和订阅计费来源。
+//
+// 调用方 settleTaskBillingOnComplete 已经用 bc.PerCallBilling 挡掉了按次/按量
+// 计费的任务(见 task_polling.go)——PerCallBilling 在任务创建时取自
+// relayInfo.PriceData.UsePrice(controller/relay.go),这里能跑到就意味着
+// 预扣阶段确实按 token 倍率算的账,不是走 ModelPrice 固定价。
 func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTokens int) {
 	if totalTokens <= 0 {
 		return
 	}
 
 	modelName := taskModelName(task)
+
+	// 分组分别定价模式下,该模型可能在全局 ModelRatio 表里完全没有条目
+	// (它的价格只存在于 model_group_price),这里必须用预扣阶段已经算好、
+	// 存在 BillingContext 里的倍率,不能重新查全局表 —— 查到的会是错误的
+	// 数字,或者(更常见)直接查不到从而误判"未配置倍率"而放弃重算。
+	if model.IsGroupPricingEnabled(modelName) {
+		recalculateTaskQuotaByTokensFromBillingContext(ctx, task, totalTokens)
+		return
+	}
 
 	// 获取模型价格和倍率
 	modelRatio, hasRatioSetting, _ := ratio_setting.GetModelRatio(modelName)
@@ -329,5 +343,29 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 	actualQuota, clamp := common.QuotaFromFloatChecked(float64(totalTokens) * modelRatio * finalGroupRatio * otherMultiplier)
 
 	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f", totalTokens, modelRatio, finalGroupRatio, otherMultiplier)
+	RecalculateTaskQuota(ctx, task, actualQuota, reason, clamp)
+}
+
+// recalculateTaskQuotaByTokensFromBillingContext 是分组分别定价模式下的重算路径:
+// 倍率与分组倍率一律读 BillingContext 里预扣阶段已经算好的值,不重新查任何
+// ratio_setting/model_group_price —— controller/relay.go 在任务创建时把
+// relayInfo.PriceData.ModelRatio 与 GroupRatioInfo.GroupRatio 原样存进了这里
+// (分别定价模式下 GroupRatio 恒为 1,已确认的既有约定,见 ResolveGroupPrice),
+// 这就是当次调用实际按哪个分组、哪个价格预扣的权威记录,不能也不该重新算一遍。
+func recalculateTaskQuotaByTokensFromBillingContext(ctx context.Context, task *model.Task, totalTokens int) {
+	bc := task.PrivateData.BillingContext
+	if bc == nil || bc.ModelRatio <= 0 {
+		return
+	}
+
+	otherMultiplier := 1.0
+	if priceData := taskBillingContextPriceData(bc); priceData != nil {
+		otherMultiplier = priceData.OtherRatioMultiplier()
+	}
+
+	actualQuota, clamp := common.QuotaFromFloatChecked(float64(totalTokens) * bc.ModelRatio * bc.GroupRatio * otherMultiplier)
+
+	reason := fmt.Sprintf("token重算(分组分别定价)：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f",
+		totalTokens, bc.ModelRatio, bc.GroupRatio, otherMultiplier)
 	RecalculateTaskQuota(ctx, task, actualQuota, reason, clamp)
 }

@@ -344,6 +344,7 @@ func migrateDB() error {
 		&CanvasCatalogModel{},
 		&DeviceBinding{},
 		&ClientContractReport{},
+		&ModelGroupPrice{},
 	)
 	if err != nil {
 		return err
@@ -408,6 +409,7 @@ func migrateDBFast() error {
 		{&CanvasCatalogModel{}, "CanvasCatalogModel"}, // 既有遗漏,顺手补(此前只在串行路径注册)
 		{&DeviceBinding{}, "DeviceBinding"},
 		{&ClientContractReport{}, "ClientContractReport"},
+		{&ModelGroupPrice{}, "ModelGroupPrice"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
