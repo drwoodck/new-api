@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -192,4 +193,97 @@ func TestGetCanvasCatalogVideoSecondPriceWinsOverGroupPricingInDispatch(t *testi
 	require.NotNil(t, price)
 	require.NotNil(t, price.VideoSecondPrice)
 	assert.Equal(t, 0.1, *price.VideoSecondPrice, "按秒计费必须赢,不能被分组分别定价的 999 盖过去")
+}
+
+// TestGetCanvasCatalogTierTableBeatsVideoSecondPrice 档表模型目录下发：
+// 档表优先于旧按秒单值，下发原价档表 + GroupRatioApplied。
+func TestGetCanvasCatalogTierTableBeatsVideoSecondPrice(t *testing.T) {
+	router := setupCatalogGroupPriceTestDB(t, "default")
+
+	savedSecond := ratio_setting.VideoSecondPrice2JSONString()
+	savedTiers := ratio_setting.VideoPriceTiers2JSONString()
+	savedGroupRatio := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateVideoSecondPriceByJSONString(savedSecond))
+		require.NoError(t, ratio_setting.UpdateVideoPriceTiersByJSONString(savedTiers))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroupRatio))
+	})
+	require.NoError(t, ratio_setting.UpdateVideoSecondPriceByJSONString(`{"ptier-catalog":0.1}`))
+	require.NoError(t, ratio_setting.UpdateVideoPriceTiersByJSONString(`{"ptier-catalog":[
+		{"label":"480P","tier_type":"resolution","key":"480p","billing_unit":"second","price":0.45},
+		{"label":"720P","tier_type":"resolution","key":"720p","billing_unit":"second","price":0.75}]}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":2}`))
+
+	model.DB.Create(&model.CanvasCatalogModel{
+		RemoteID: "ptier-catalog", DisplayName: "Tiered", Capabilities: "video_gen",
+		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1,
+	})
+	model.DB.Create(&model.Ability{Group: "default", Model: "ptier-catalog", ChannelId: 1, Enabled: true})
+
+	resp := fetchCanvasCatalog(t, router)
+	require.Len(t, resp.Models, 1)
+	price := resp.Models[0].GroupPrice
+	require.NotNil(t, price, "档表模型必须下发价格")
+	require.NotNil(t, price.PriceTiers, "必须下发档表而非旧字段")
+	require.Nil(t, price.VideoSecondPrice, "档表路径必须让旧按秒字段缺席")
+	require.Len(t, *price.PriceTiers, 2)
+	assert.InDelta(t, 0.9, (*price.PriceTiers)[0].Price, 1e-9, "目录档表必须是 ×GroupRatio 的终价(0.45 × default 组倍率 2)")
+	assert.InDelta(t, 1.5, (*price.PriceTiers)[1].Price, 1e-9)
+	assert.Equal(t, 1, price.QuotaType)
+	assert.Equal(t, float64(2), price.GroupRatioApplied)
+}
+
+// TestGetCanvasCatalogSeparateModeRowTiersOnlyForOwnGroup 分别定价 + 行内档表：
+// 只下发调用者分组的行内档表（原价、GroupRatioApplied 恒 1）。
+func TestGetCanvasCatalogSeparateModeRowTiersOnlyForOwnGroup(t *testing.T) {
+	router := setupCatalogGroupPriceTestDB(t, "vip")
+
+	m := &model.Model{ModelName: "ptier-catalog-gp", Status: 1, GroupPricingEnabled: true}
+	require.NoError(t, m.Insert())
+	model.RefreshPricing()
+
+	tiers := types.PriceTierList{
+		{Label: "720P", TierType: types.TierTypeResolution, Key: "720p", BillingUnit: types.BillingUnitSecond, Price: 0.75},
+	}
+	require.NoError(t, model.ReplaceModelGroupPrices("ptier-catalog-gp", []model.ModelGroupPrice{
+		{GroupName: "vip", PriceTiers: &tiers},
+	}))
+
+	model.DB.Create(&model.CanvasCatalogModel{
+		RemoteID: "ptier-catalog-gp", DisplayName: "RowTiered", Capabilities: "video_gen",
+		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1,
+	})
+	model.DB.Create(&model.Ability{Group: "vip", Model: "ptier-catalog-gp", ChannelId: 1, Enabled: true})
+
+	resp := fetchCanvasCatalog(t, router)
+	require.Len(t, resp.Models, 1)
+	price := resp.Models[0].GroupPrice
+	require.NotNil(t, price)
+	require.NotNil(t, price.PriceTiers)
+	require.Len(t, *price.PriceTiers, 1)
+	assert.InDelta(t, 0.75, (*price.PriceTiers)[0].Price, 1e-9)
+	assert.Equal(t, float64(1), price.GroupRatioApplied, "分别定价 GroupRatio 恒 1")
+}
+
+// TestGetCanvasCatalogNoTierTableKeepsLegacyFields 无档表模型目录下发原字段，
+// 档表字段缺席（旧路径回归）。
+func TestGetCanvasCatalogNoTierTableKeepsLegacyFields(t *testing.T) {
+	router := setupCatalogGroupPriceTestDB(t, "default")
+
+	savedSecond := ratio_setting.VideoSecondPrice2JSONString()
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateVideoSecondPriceByJSONString(savedSecond)) })
+	require.NoError(t, ratio_setting.UpdateVideoSecondPriceByJSONString(`{"ptier-legacy-catalog":0.1}`))
+
+	model.DB.Create(&model.CanvasCatalogModel{
+		RemoteID: "ptier-legacy-catalog", DisplayName: "Legacy", Capabilities: "video_gen",
+		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1,
+	})
+	model.DB.Create(&model.Ability{Group: "default", Model: "ptier-legacy-catalog", ChannelId: 1, Enabled: true})
+
+	resp := fetchCanvasCatalog(t, router)
+	require.Len(t, resp.Models, 1)
+	price := resp.Models[0].GroupPrice
+	require.NotNil(t, price)
+	require.Nil(t, price.PriceTiers, "无档表模型不得下发档表字段")
+	require.NotNil(t, price.VideoSecondPrice, "旧按秒字段必须照旧下发")
 }

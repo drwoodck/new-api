@@ -960,6 +960,9 @@ type TaskInfo struct {
 	// DurationSeconds 上游返回的实际视频时长（秒），用于按秒计费的差额结算。
 	// 上游未返回时保持 0，此时按请求时长计费不做调整。
 	DurationSeconds int `json:"duration_seconds,omitempty"`
+	// Resolution 上游实际输出的归一化分辨率档位键（"480p"/"720p"/"1080p"/"4k"），
+	// 用于档位计费的按实际档差额结算。上游未返回时保持空，此时沿用预扣档。
+	Resolution string `json:"resolution,omitempty"`
 }
 
 func FailTaskInfo(reason string) *TaskInfo {

@@ -19,6 +19,8 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	hosttypes "github.com/QuantumNous/new-api/types"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -198,9 +200,23 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	//     （同 key 覆盖适配器的取值，避免与其硬编码按秒逻辑重复计费）。
 	perSecondBilling := applyVideoSecondPricing(c, info)
 
+	// 5.6 档位计费维度倍率剔除：档价本身已按分辨率分档，适配器注入的
+	//    分辨率维度倍率（sora 的 size=1.666、gemini/vertex 的 resolution=
+	//    1.5/2.333）再乘一次就是双计。保留 seconds（计费时长）与 video_input
+	//    等正交成本维度。
+	if info.PriceData.TierBilling {
+		for _, key := range hosttypes.TierDimensionRatioKeys {
+			info.PriceData.RemoveOtherRatio(key)
+		}
+	}
+
 	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
 	//    按秒计费是管理员显式配置，优先级高于 TaskPricePatches 环境变量。
-	if perSecondBilling || !common.StringsContains(constant.TaskPricePatches, modelName) {
+	//    按次档位计费（request 档）是固定价：适配器恒注入的 seconds/size 等
+	//    倍率与按次语义无关，必须跳过应用 —— 否则固定价被放大数倍且
+	//    PerCallBilling 跳过结算、超扣永不纠偏。
+	tierRequestBilling := taskIsTierRequestBilling(info.PriceData)
+	if !tierRequestBilling && (perSecondBilling || !common.StringsContains(constant.TaskPricePatches, modelName)) {
 		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
 		quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
 		info.PriceData.Quota = quota
@@ -246,7 +262,17 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
+	//    按次档位计费（request 档）是固定价，跳过（同步骤 6 的护栏：适配器
+	//    注入的倍率会把固定价放大且没有结算纠偏）。
 	finalQuota := info.PriceData.Quota
+	if tierRequestBilling {
+		return &TaskSubmitResult{
+			UpstreamTaskID: upstreamTaskID,
+			TaskData:       taskData,
+			Platform:       platform,
+			Quota:          finalQuota,
+		}, nil
+	}
 	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
 		// 按秒计费的基础额度是「每秒单价」，seconds 倍率是计费的必要组成部分。
 		// 适配器若未在调整结果里带上 seconds，直接替换会丢掉时长导致少扣费。
@@ -277,6 +303,13 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		Platform:       platform,
 		Quota:          finalQuota,
 	}, nil
+}
+
+// taskIsTierRequestBilling 判断任务是否为"按次档位计费"（request 档）。
+// 按次档位是固定价：提交阶段不得应用适配器注入的 OtherRatios，结算阶段
+// 也经 PerCallBilling 跳过 —— 两处护栏共用这一个判定，防止口径漂移。
+func taskIsTierRequestBilling(priceData hosttypes.PriceData) bool {
+	return priceData.TierBilling && priceData.TierBillingUnit == hosttypes.BillingUnitRequest
 }
 
 // applyVideoSecondPricing 为按秒计费的模型解析并注入时长倍率。

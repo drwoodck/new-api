@@ -336,6 +336,8 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		if resTask.Duration > 0 {
 			taskResult.DurationSeconds = resTask.Duration
 		}
+		// 上游回报的实际分辨率（"1080p"）归一化为档位键，供档位计费按实际档结算
+		taskResult.Resolution = relaycommon.NormalizeTaskResolution(resTask.Resolution)
 	case "failed":
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"

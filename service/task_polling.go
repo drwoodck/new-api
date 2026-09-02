@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/samber/lo"
@@ -676,6 +677,10 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 // 返回 true 表示该任务走按秒计费，调用方不应再执行 adaptor/token 结算路径
 // （时长才是计费基准，token 数与之无关）。
 //
+// 档位计费任务（TierBilling，second 档）在既有时长结算之上叠加"按实际档位
+// 重选"：先按上游回报的实际分辨率从预扣快照重选一档，再用新档价进入公式。
+// request 档任务已在提交时标记 PerCallBilling，走不到这里。
+//
 // 公式与提交时保持一致：
 //
 //	quota = 每秒单价 × QuotaPerUnit × 分组倍率 × 实际时长 × 其他倍率（分辨率等）
@@ -683,6 +688,39 @@ func settleVideoSecondBilling(ctx context.Context, task *model.Task, taskResult 
 	bc := task.PrivateData.BillingContext
 	if bc == nil || bc.SecondPrice <= 0 {
 		return false
+	}
+
+	// 档位计费：先按实际分辨率从快照重选档。快照是权威 —— 绝不重查当前
+	// 档表（管理员可能在提交与完成之间改价/删档）。分辨率档的实际键在快照
+	// 中缺失时保持预扣档并记 warn —— 缺档不回退全局，闸门语义延续到结算。
+	// 重选档必须与预扣档同为按秒计价（NormalizePriceTierList 已强制同表单位
+	// 一致，这里是历史脏数据的防御性护栏 —— request 单位档价当秒价乘时长
+	// 会把金额放大到封顶）。
+	secondPrice := bc.SecondPrice
+	tierChanged := false
+	if bc.TierBilling && bc.TierSnapshot != nil {
+		actualResolution := ""
+		if taskResult != nil {
+			actualResolution = taskResult.Resolution
+		}
+		if tier, ok := model.SelectTierFromSnapshot(bc.TierSnapshot, bc.TierType, actualResolution); ok &&
+			tier.BillingUnit == types.BillingUnitSecond {
+			if math.Abs(tier.Price-secondPrice) > 1e-9 {
+				logger.LogInfo(ctx, fmt.Sprintf("任务 %s 档位计费实际档结算：预扣档 %s($%g/秒)，实际档 %s($%g/秒)",
+					task.TaskID, bc.TierKey, secondPrice, tier.Key, tier.Price))
+				secondPrice = tier.Price
+				bc.TierKey = tier.Key
+				tierChanged = true
+			}
+		} else if actualResolution != "" && bc.TierType == types.TierTypeResolution {
+			logger.LogWarn(ctx, fmt.Sprintf("任务 %s 档位计费：实际分辨率 %s 不在预扣快照档表中，保持预扣档 %s 计费",
+				task.TaskID, actualResolution, bc.TierKey))
+		} else if actualResolution == "" && bc.TierType == types.TierTypeResolution {
+			// 该渠道完成响应不回报实际分辨率：按请求档收尾。对账人员需要
+			// 这条日志发现"低报分辨率"的漏损信号。
+			logger.LogWarn(ctx, fmt.Sprintf("任务 %s 档位计费：上游未返回实际分辨率,按请求档 %s 结算(该渠道无实际分辨率对账能力,警惕低报)",
+				task.TaskID, bc.TierKey))
+		}
 	}
 
 	// 上游未返回实际时长：预扣所用的请求时长即为最终时长，无需调整
@@ -695,17 +733,26 @@ func settleVideoSecondBilling(ctx context.Context, task *model.Task, taskResult 
 	if actualSeconds > relaycommon.MaxTaskDurationSeconds {
 		actualSeconds = relaycommon.MaxTaskDurationSeconds
 	}
-	if billedSeconds := bc.OtherRatios["seconds"]; billedSeconds == actualSeconds {
-		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按秒计费，实际时长与预扣一致（%.0f 秒）", task.TaskID, actualSeconds))
-		return true
+	// 时长一致且档位没变时才可提前结束 —— 档位变了（实际分辨率升/降档）时
+	// 即使时长相同也必须按新档价差额结算。
+	if !tierChanged {
+		if billedSeconds := bc.OtherRatios["seconds"]; billedSeconds == actualSeconds {
+			logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按秒计费，实际时长与预扣一致（%.0f 秒）", task.TaskID, actualSeconds))
+			return true
+		}
 	}
 
 	// 除 seconds 外的其他倍率（分辨率等）保持提交时的取值。
+	// 档位计费任务剔除分辨率维度倍率键（size/resolution）—— 档价已按分辨率
+	// 分档，这些键再乘就是双计；预扣侧(relay_task.go 5.6)同样剔除，两侧口径一致。
 	// OtherRatios 来自数据库 JSON，可能含 NaN/Inf 等脏数据；
 	// 这里的有效性判断与 PriceData 的一致（NaN 无法通过 ratio > 0）。
 	otherMultiplier := 1.0
 	for key, ratio := range bc.OtherRatios {
 		if key == "seconds" {
+			continue
+		}
+		if bc.TierBilling && types.IsTierDimensionRatioKey(key) {
 			continue
 		}
 		if !(ratio > 0) || math.IsInf(ratio, 1) {
@@ -714,7 +761,7 @@ func settleVideoSecondBilling(ctx context.Context, task *model.Task, taskResult 
 		otherMultiplier *= ratio
 	}
 
-	baseQuota := bc.SecondPrice * common.QuotaPerUnit * bc.GroupRatio
+	baseQuota := secondPrice * common.QuotaPerUnit * bc.GroupRatio
 	actualQuota, clamp := common.QuotaFromFloatChecked(baseQuota * actualSeconds * otherMultiplier)
 
 	// 把 seconds 更新为实际时长：RecalculateTaskQuota 会经 taskBillingOther 把
@@ -726,6 +773,6 @@ func settleVideoSecondBilling(ctx context.Context, task *model.Task, taskResult 
 	bc.OtherRatios["seconds"] = actualSeconds
 
 	RecalculateTaskQuota(ctx, task, actualQuota,
-		fmt.Sprintf("按秒计费实际时长结算（%.0f 秒 × $%g/秒）", actualSeconds, bc.SecondPrice), clamp)
+		fmt.Sprintf("按秒计费实际时长结算（%.0f 秒 × $%g/秒）", actualSeconds, secondPrice), clamp)
 	return true
 }

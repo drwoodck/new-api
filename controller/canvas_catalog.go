@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -71,6 +72,11 @@ type canvasGroupPrice struct {
 	ModelRatio       float64  `json:"model_ratio"`
 	CompletionRatio  float64  `json:"completion_ratio"`
 	VideoSecondPrice *float64 `json:"video_second_price,omitempty"`
+	// PriceTiers 档位计费的档表(统一模式为已 ×分组倍率的终价、分别定价为
+	// 行内终价 —— 与 ModelPrice 同语义:目录下发"已按调用者分组算好的数字",
+	// 画布侧不再叠乘)。非 nil 时画布以档表为准选档计价,
+	// ModelPrice/VideoSecondPrice 等旧字段不再参与。
+	PriceTiers *types.PriceTierList `json:"price_tiers,omitempty"`
 	// GroupRatioApplied:统一模式下是该分组的 GroupRatio;分别定价模式下恒为 1
 	// (分别定价的数字本身就是最终价,不再叠乘倍率——ResolveGroupPrice 的既有约定)。
 	GroupRatioApplied float64 `json:"group_ratio_applied"`
@@ -112,6 +118,19 @@ func parseCapabilities(raw string) []string {
 func resolveCanvasGroupPrice(remoteID, group string) *canvasGroupPrice {
 	if group == "" {
 		return nil
+	}
+	// 档位计费最优先：模型配了档表(全局或行内)时下发档表(原价)。
+	// 与 ModelPriceHelperPerCall 的档位分支同序 —— 优先级矩阵见
+	// model/model_group_price.go 的 ResolveTierPrice 注释。
+	if tierTable, err := model.ResolveGroupTierTable(remoteID, group); err != nil {
+		common.SysError(fmt.Sprintf("解析模型 %s 在分组 %s 下的档表失败,本次目录不下发该条目的价格: %v", remoteID, group, err))
+		return nil
+	} else if tierTable != nil {
+		return &canvasGroupPrice{
+			QuotaType:         1,
+			PriceTiers:        tierTable.PriceTiers,
+			GroupRatioApplied: tierTable.GroupRatioApplied,
+		}
 	}
 	// 视频按秒计费与分组分别定价互斥、按秒计费为准(ModelPriceHelperPerCall
 	// 的既有规则),这里同样优先处理:按秒计费的价格对所有分组都一样,

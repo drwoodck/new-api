@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -38,4 +39,30 @@ func TestSoraBuildRequestBodyReturnsReplayablePassThroughBody(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, replayBody.Close())
 	assert.Equal(t, payload, replay)
+}
+
+// TestSoraParseTaskResultCarriesActualResolution sora 完成响应里的实际输出尺寸
+// 必须归一化为档位键透传到 TaskInfo.Resolution（档位计费按实际档结算的依据）。
+func TestSoraParseTaskResultCarriesActualResolution(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	body := []byte(`{"id":"t1","status":"completed","seconds":"10","size":"720x1280"}`)
+
+	result, err := adaptor.ParseTaskResult(body)
+
+	require.NoError(t, err)
+	require.Equal(t, model.TaskStatusSuccess, result.Status)
+	require.Equal(t, 10, result.DurationSeconds)
+	require.Equal(t, "720p", result.Resolution, "720x1280 必须归一化为 720p 档位键")
+}
+
+// TestSoraParseTaskResultMissingSizeLeavesResolutionEmpty 上游未返回尺寸时
+// Resolution 保持空（结算回退请求档）。
+func TestSoraParseTaskResultMissingSizeLeavesResolutionEmpty(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	body := []byte(`{"id":"t1","status":"completed","seconds":"10"}`)
+
+	result, err := adaptor.ParseTaskResult(body)
+
+	require.NoError(t, err)
+	require.Empty(t, result.Resolution)
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -173,9 +174,12 @@ type canvasCatalogOverviewRow struct {
 }
 
 type canvasCatalogOverviewGroupPrice struct {
-	GroupName string   `json:"group_name"`
-	QuotaType int      `json:"quota_type"`
+	GroupName string `json:"group_name"`
+	QuotaType int    `json:"quota_type"`
 	Price     *float64 `json:"price"`
+	// PriceTiers 档位计费的档表（原价）。非 nil 时该分组的计费以档表为准，
+	// 展示层据此显示"档表 ×N"徽章而非单值价格。
+	PriceTiers *types.PriceTierList `json:"price_tiers,omitempty"`
 }
 
 // buildOverviewGroupPrices 对一个模型算出它在**全部**已知分组上的价格。
@@ -190,8 +194,16 @@ func buildOverviewGroupPrices(
 ) []canvasCatalogOverviewGroupPrice {
 	out := make([]canvasCatalogOverviewGroupPrice, 0, len(groupNames))
 	for _, groupName := range groupNames {
+		row := canvasCatalogOverviewGroupPrice{GroupName: groupName}
+		// 档位计费优先：模型(对该分组)配了档表时，总览以档表为准展示。
+		if tierTable := model.ResolveGroupTierTableFromPreloaded(modelName, groupName, groupPricingEnabled, groupPrices); tierTable != nil {
+			row.QuotaType = 1
+			row.PriceTiers = tierTable.PriceTiers
+			out = append(out, row)
+			continue
+		}
 		resolved := model.ResolveGroupPriceFromPreloaded(modelName, groupName, groupPricingEnabled, groupPrices)
-		row := canvasCatalogOverviewGroupPrice{GroupName: groupName, QuotaType: resolved.QuotaType}
+		row.QuotaType = resolved.QuotaType
 		if resolved.Available {
 			price := resolved.ModelPrice
 			if resolved.QuotaType == 0 {

@@ -1,6 +1,7 @@
 package ratio_setting
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -686,6 +687,56 @@ func GetVideoSecondPrice(name string) (float64, bool) {
 
 func GetVideoSecondPriceCopy() map[string]float64 {
 	return videoSecondPriceMap.ReadAll()
+}
+
+// defaultVideoPriceTiers 与 defaultVideoSecondPrice 同理故意留空：
+// 档位定价必须由管理员显式配置后生效，非空默认会把存量模型静默切到档位计费。
+var defaultVideoPriceTiers = map[string]types.PriceTierList{}
+var videoPriceTiersMap = types.NewRWMap[string, types.PriceTierList]()
+
+func VideoPriceTiers2JSONString() string {
+	return videoPriceTiersMap.MarshalJSONString()
+}
+
+// UpdateVideoPriceTiersByJSONString 解析并校验 {模型: 档表} JSON。
+// 每张档表经 types.NormalizePriceTierList 校验归一化；空档表条目视为
+// "未配置"直接丢弃；任一档表非法则整体拒绝（不部分生效）。
+func UpdateVideoPriceTiersByJSONString(jsonStr string) error {
+	var raw map[string]types.PriceTierList
+	if err := common.Unmarshal([]byte(jsonStr), &raw); err != nil {
+		return err
+	}
+	normalized := make(map[string]types.PriceTierList, len(raw))
+	for name, tiers := range raw {
+		norm, err := types.NormalizePriceTierList(tiers)
+		if err != nil {
+			return fmt.Errorf("模型 %s: %w", name, err)
+		}
+		if len(norm) == 0 {
+			continue
+		}
+		normalized[name] = norm
+	}
+	data, err := common.Marshal(normalized)
+	if err != nil {
+		return err
+	}
+	return types.LoadFromJsonStringWithCallback(videoPriceTiersMap, string(data), InvalidateExposedDataCache)
+}
+
+// GetVideoPriceTiers 返回模型的全局档表。第二个返回值为 false 表示
+// 该模型未配置档位定价，调用方应回退既有按次/按秒路径。
+func GetVideoPriceTiers(name string) (types.PriceTierList, bool) {
+	name = FormatMatchingModelName(name)
+	tiers, ok := videoPriceTiersMap.Get(name)
+	if !ok || len(tiers) == 0 {
+		return nil, false
+	}
+	return tiers, true
+}
+
+func GetVideoPriceTiersCopy() map[string]types.PriceTierList {
+	return videoPriceTiersMap.ReadAll()
 }
 
 func AudioRatio2JSONString() string {

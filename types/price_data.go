@@ -27,12 +27,25 @@ type PriceData struct {
 	AudioCompletionRatio float64
 	// VideoSecondPrice 视频按秒计费的每秒单价（美元/秒）。大于 0 表示该请求
 	// 走按秒计费，任务完成时需按上游返回的实际时长差额结算。
-	VideoSecondPrice  float64
-	otherRatios       map[string]float64
-	UsePrice          bool
-	Quota             int // 按次计费的最终额度（MJ / Task）
+	VideoSecondPrice float64
+	// TierBilling 表示本次请求走档位计费（PriceTier 命中）。档表模型下
+	// VideoSecondPrice/ModelPrice 承载的是命中档的单价，配合以下字段在
+	// 结算阶段按实际档位差额结算。
+	TierBilling bool
+	// TierType 命中的档位维度（types.TierTypeResolution 等）。
+	TierType string
+	// TierKey 预扣时命中的档位键（request 空 key 档命中时为 ""）。
+	TierKey string
+	// TierBillingUnit 命中档的计价单位（types.BillingUnitSecond/Request）。
+	TierBillingUnit string
+	// TierSnapshot 预扣时的完整档表快照 —— 结算重选档的权威依据，防止
+	// 提交与完成之间管理员改价/删档影响在途任务。
+	TierSnapshot     *PriceTierList
+	otherRatios      map[string]float64
+	UsePrice         bool
+	Quota            int // 按次计费的最终额度（MJ / Task）
 	QuotaToPreConsume int // 按量计费的预消耗额度
-	GroupRatioInfo    GroupRatioInfo
+	GroupRatioInfo   GroupRatioInfo
 }
 
 func (p *PriceData) AddOtherRatio(key string, ratio float64) {
@@ -43,6 +56,15 @@ func (p *PriceData) AddOtherRatio(key string, ratio float64) {
 		p.otherRatios = make(map[string]float64)
 	}
 	p.otherRatios[key] = ratio
+}
+
+// RemoveOtherRatio 删除一个附加倍率键。档位计费剔除分辨率维度倍率时使用
+// （档价本身已按分辨率分档，size/resolution 键再乘一次就是双计）。
+func (p *PriceData) RemoveOtherRatio(key string) {
+	if p.otherRatios == nil {
+		return
+	}
+	delete(p.otherRatios, key)
 }
 
 func (p *PriceData) ReplaceOtherRatios(ratios map[string]float64) bool {

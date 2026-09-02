@@ -623,6 +623,14 @@ func RelayTask(c *gin.Context) {
 			PerCallBilling: !perSecondBilling &&
 				(common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice),
 			SecondPrice: relayInfo.PriceData.VideoSecondPrice,
+			// 档位计费快照：SecondPrice/UsePrice 承载的是预扣档的价格语义
+			// （tier-second → SecondPrice=档价、PerCallBilling=false 参与差额结算；
+			// tier-request → UsePrice=true、固定价不结算），tier 字段供结算
+			// 阶段按实际档位重选（快照是权威，防提交后改价影响在途任务）。
+			TierBilling:  relayInfo.PriceData.TierBilling,
+			TierType:     relayInfo.PriceData.TierType,
+			TierKey:      relayInfo.PriceData.TierKey,
+			TierSnapshot: relayInfo.PriceData.TierSnapshot,
 		}
 		task.Quota = result.Quota
 		task.Data = result.TaskData

@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/types"
 )
 
 type TaskStatus string
@@ -127,8 +128,16 @@ type TaskBillingContext struct {
 	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
 	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
 	// SecondPrice 视频按秒计费的每秒单价（美元/秒）。大于 0 时轮询阶段
-	// 按上游返回的实际时长重算额度并退补差额。
+	// 按上游返回的实际时长重算额度并退补差额。档位 second 档时承载命中档原价。
 	SecondPrice float64 `json:"second_price,omitempty"`
+	// TierBilling 任务走档位计费。SecondPrice/UsePrice/PerCallBilling 已按
+	// 命中档的计价单位设置妥当（second 档参与差额结算、request 档固定价），
+	// 以下 tier 字段供结算阶段按实际档位重选 —— 快照是权威，绝不重查当前
+	// 档表（管理员可能在提交与完成之间改价/删档）。
+	TierBilling  bool                 `json:"tier_billing,omitempty"`
+	TierType     string               `json:"tier_type,omitempty"`     // 档位维度（resolution/request/...）
+	TierKey      string               `json:"tier_key,omitempty"`      // 预扣命中的档位键
+	TierSnapshot *types.PriceTierList `json:"tier_snapshot,omitempty"` // 预扣时的完整档表快照（原价）
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）

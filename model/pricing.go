@@ -30,7 +30,10 @@ type Pricing struct {
 	CreateCacheRatio       *float64                `json:"create_cache_ratio,omitempty"`
 	ImageRatio             *float64                `json:"image_ratio,omitempty"`
 	VideoSecondPrice       *float64                `json:"video_second_price,omitempty"`
-	AudioRatio             *float64                `json:"audio_ratio,omitempty"`
+	// PriceTiers 模型的档位表（统一模式全局档表，原价）。分别定价模式的行内
+	// 档表不在此下发 —— 目录接口按调用者分组返回对应档表。
+	PriceTiers             *types.PriceTierList     `json:"price_tiers,omitempty"`
+	AudioRatio             *float64                 `json:"audio_ratio,omitempty"`
 	AudioCompletionRatio   *float64                `json:"audio_completion_ratio,omitempty"`
 	EnableGroup            []string                `json:"enable_groups"`
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
@@ -399,6 +402,18 @@ func updatePricing() {
 			pricing.VideoSecondPrice = &videoSecondPrice
 			pricing.ModelPrice = videoSecondPrice
 			pricing.QuotaType = 1
+		}
+		// 档位计费（price_tiers）：/api/pricing 只下发统一模式的全局档表 ——
+		// 分别定价模式下各分组的行内档表不下发（价格随目录接口按调用者分组返回），
+		// 且分别定价模式会忽略全局档表（ResolveTierPrice 只认行内），照发全局档表
+		// 会让画布按与计费不同的口径估算。同时清掉旧标量字段,避免档表与
+		// ModelPrice/VideoSecondPrice 并存时旧客户端误取旧字段。
+		if tiers, ok := ratio_setting.GetVideoPriceTiers(model); ok && !IsGroupPricingEnabled(model) {
+			priceTiers := tiers // 拷贝切片头，避免与 RWMap 内部共享可变引用
+			pricing.PriceTiers = &priceTiers
+			pricing.QuotaType = 1
+			pricing.ModelPrice = 0
+			pricing.VideoSecondPrice = nil
 		}
 		if ratio_setting.ContainsAudioRatio(model) {
 			audioRatio := ratio_setting.GetAudioRatio(model)

@@ -251,28 +251,63 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hosttypes.PriceData, error) {
 	groupRatioInfo := HandleGroupRatio(c, info)
 
+	// 档位计费（price_tiers）：模型配置了档表时优先于此后的全部路径。
+	// NoTable（无档表）时继续走既有流程，旧模型行为完全不变。
+	//
+	// 分别定价模式的行内档表需要查行：把这次行查询缓存下来，让下方旧标量
+	// 分支复用（ResolveGroupPriceFromRow），避免同一请求查两次
+	// model_group_price 的热路径回归。统一模式只读全局档表（RWMap），零 DB。
+	tierInput := relaycommon.BuildTaskTierInput(c, info)
+	var groupPriceRow *model.ModelGroupPrice
+	var groupPriceRowChecked bool
+	groupPricingEnabled := model.IsGroupPricingEnabled(info.OriginModelName)
+	if groupPricingEnabled {
+		row, err := model.GetModelGroupPrice(info.OriginModelName, info.UsingGroup)
+		if err != nil {
+			return hosttypes.PriceData{}, err
+		}
+		groupPriceRow = row
+		groupPriceRowChecked = true
+		resolved := model.ResolveTierPriceFromRow(info.OriginModelName, info.UsingGroup, tierInput, row)
+		if resolved.Status == model.TierResolutionResolved {
+			return buildTierPriceData(resolved, groupRatioInfo)
+		}
+		if resolved.Status == model.TierResolutionUnavailable {
+			return hosttypes.PriceData{}, modelTierPriceNotAvailableError(
+				info.OriginModelName, info.UsingGroup, resolved.TierKey, info.UserId)
+		}
+	} else {
+		resolved := model.ResolveTierPriceUnified(info.OriginModelName, info.UserGroup, info.UsingGroup, tierInput)
+		if resolved.Status == model.TierResolutionResolved {
+			return buildTierPriceData(resolved, groupRatioInfo)
+		}
+		if resolved.Status == model.TierResolutionUnavailable {
+			return hosttypes.PriceData{}, modelTierPriceNotAvailableError(
+				info.OriginModelName, info.UsingGroup, resolved.TierKey, info.UserId)
+		}
+	}
+
 	// 视频按秒计费的模型只需配置每秒单价，不应再要求额外的按次价格/倍率。
 	// 真正的额度计算（单价 × 时长）在 RelayTaskSubmit 的按秒计费步骤完成。
-	//
-	// 必须在检查分组分别定价(IsGroupPricingEnabled)**之前**判断并 return ——
-	// 理由同 ModelPriceHelper 里 tiered_expr 分支的注释:IsGroupPricingEnabled
-	// 会触发一次 model.GetPricing() 缓存刷新,按秒计费的模型不该为了判断
-	// "是否也开了分组分别定价"而承担这次刷新开销。代价是放弃两者冲突时的
-	// 一条运营方诊断日志,按秒计费依然照常为准。
 	if secondPrice, ok := ratio_setting.GetVideoSecondPrice(info.OriginModelName); ok {
 		return buildVideoSecondPriceData(secondPrice, groupRatioInfo)
 	}
-
-	groupPricingEnabled := model.IsGroupPricingEnabled(info.OriginModelName)
 
 	var modelPrice float64
 	var usePrice bool
 	var modelRatio float64
 
 	if groupPricingEnabled {
-		groupPriceResult, err := model.ResolveGroupPrice(info.OriginModelName, info.UsingGroup)
-		if err != nil {
-			return hosttypes.PriceData{}, err
+		var groupPriceResult model.ResolvedGroupPrice
+		if groupPriceRowChecked {
+			// 复用档位检查时已查好的行 —— 热路径每请求只查一次表
+			groupPriceResult = model.ResolveGroupPriceFromRow(groupPriceRow)
+		} else {
+			var err error
+			groupPriceResult, err = model.ResolveGroupPrice(info.OriginModelName, info.UsingGroup)
+			if err != nil {
+				return hosttypes.PriceData{}, err
+			}
 		}
 		if !groupPriceResult.Available {
 			return hosttypes.PriceData{}, modelGroupPriceNotAvailableError(info.OriginModelName, info.UsingGroup, info.UserId)
@@ -379,6 +414,10 @@ func HasModelBillingConfig(modelName string) bool {
 	if _, ok := ratio_setting.GetVideoSecondPrice(modelName); ok {
 		return true
 	}
+	// 档位计费也是合法的计费配置 —— 只配了档表的模型不应从模型列表消失。
+	if _, ok := ratio_setting.GetVideoPriceTiers(modelName); ok {
+		return true
+	}
 	if _, ok := ratio_setting.GetModelPrice(modelName, false); ok {
 		return true
 	}
@@ -459,5 +498,80 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 	logger.LogDebug(c, "model_price_helper_tiered result: model=%s preConsume=%d quotaBeforeGroup=%.2f groupRatio=%.2f tier=%s", info.OriginModelName, preConsumedQuota, quotaBeforeGroup, groupRatioInfo.GroupRatio, trace.MatchedTier)
 
 	info.PriceData = priceData
+	return priceData, nil
+}
+
+// modelTierPriceNotAvailableError 档表模型的请求档位在当前分组未配置时的错误。
+// 与 modelGroupPriceNotAvailableError 同构：管理员看到"缺哪个档"，
+// 用户看到"请联系管理员"。
+func modelTierPriceNotAvailableError(modelName, groupName, tierKey string, userId int) error {
+	tierDisplay := tierKey
+	if tierDisplay == "" {
+		tierDisplay = "(默认档)"
+	}
+	if model.IsAdmin(userId) {
+		return fmt.Errorf(
+			"模型 %s 已配置档位定价，但档位「%s」在分组「%s」的档表中未配置价格。请在「模型」页面的分组配置或「计费与支付 → 分组定价」中补充该档位；"+
+				"Model %s has tiered pricing enabled, but tier %q is not configured for group %q.",
+			modelName, tierDisplay, groupName, modelName, tierDisplay, groupName,
+		)
+	}
+	return fmt.Errorf(
+		"模型 %s 对您当前的分组与请求档位不可用，请联系站点管理员；"+
+			"Model %s is not available for your current group and requested tier.",
+		modelName, modelName,
+	)
+}
+
+// buildTierPriceData 把解析出的档位换算成 PriceData。
+// resolved.Price 是档位原价（未乘倍率），统一模式与分别定价模式的倍率差异
+// 全部体现在 resolved.GroupRatioApplied 上 —— 这里覆盖 groupRatioInfo.GroupRatio
+// 为实际应用值后按既有公式乘一次，与全局标量路径"原价 × GroupRatio"同口径。
+//
+// billing_unit=second：委托 buildVideoSecondPriceData（1 秒的额度），
+// VideoSecondPrice 字段承载档价 —— relay_task.go 的 applyVideoSecondPricing 与
+// controller/relay.go 的 PerCallBilling 判定无需感知档位即可自动正确工作
+// （tier-second → 参与差额结算；tier-request → 固定价不结算）。
+func buildTierPriceData(resolved model.ResolvedTierPrice, groupRatioInfo hosttypes.GroupRatioInfo) (hosttypes.PriceData, error) {
+	groupRatioInfo.GroupRatio = resolved.GroupRatioApplied
+	groupRatioInfo.HasSpecialRatio = false
+	groupRatioInfo.GroupSpecialRatio = -1
+
+	var priceData hosttypes.PriceData
+	var err error
+	switch resolved.BillingUnit {
+	case hosttypes.BillingUnitSecond:
+		priceData, err = buildVideoSecondPriceData(resolved.Price, groupRatioInfo)
+	case hosttypes.BillingUnitRequest:
+		quota, convErr := common.QuotaFromFloatStrict(resolved.Price * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		if convErr != nil {
+			return hosttypes.PriceData{}, convErr
+		}
+		freeModel := false
+		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
+			if groupRatioInfo.GroupRatio == 0 || resolved.Price == 0 {
+				quota = 0
+				freeModel = true
+			}
+		}
+		priceData = hosttypes.PriceData{
+			FreeModel:      freeModel,
+			ModelPrice:     resolved.Price,
+			UsePrice:       true,
+			Quota:          quota,
+			GroupRatioInfo: groupRatioInfo,
+		}
+	default:
+		return hosttypes.PriceData{}, fmt.Errorf("model tier %q has unsupported billing unit %q", resolved.TierKey, resolved.BillingUnit)
+	}
+	if err != nil {
+		return hosttypes.PriceData{}, err
+	}
+
+	priceData.TierBilling = true
+	priceData.TierType = resolved.TierType
+	priceData.TierKey = resolved.TierKey
+	priceData.TierBillingUnit = resolved.BillingUnit
+	priceData.TierSnapshot = resolved.TierSnapshot
 	return priceData, nil
 }

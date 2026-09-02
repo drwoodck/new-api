@@ -309,6 +309,8 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		if seconds, err := strconv.Atoi(resTask.Seconds); err == nil && seconds > 0 {
 			taskResult.DurationSeconds = seconds
 		}
+		// 上游回报的实际输出尺寸（"720x1280"）归一化为档位键，供档位计费按实际档结算
+		taskResult.Resolution = relaycommon.NormalizeTaskResolution(resTask.Size)
 	case "failed", "cancelled":
 		taskResult.Status = model.TaskStatusFailure
 		if resTask.Error != nil {
