@@ -20,6 +20,8 @@ For commercial licensing, please contact support@quantumnous.com
 // Pricing Types
 // ----------------------------------------------------------------------------
 
+import type { PriceTier } from '@/features/models/types'
+
 export type PricingVendor = {
   id: number
   name: string
@@ -45,6 +47,8 @@ export type PricingModel = {
   image_ratio?: number | null
   /** USD per second of generated video; set only for per-second billed video models */
   video_second_price?: number | null
+  /** 档位表（统一模式全局档表原价）。非空时计费以档表为准。 */
+  price_tiers?: PriceTier[] | null
   audio_ratio?: number | null
   audio_completion_ratio?: number | null
   enable_groups: string[]

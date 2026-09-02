@@ -213,6 +213,7 @@ export type ModelSettings = {
   CompletionRatio: string
   ImageRatio: string
   VideoSecondPrice: string
+  VideoPriceTiers: string
   AudioRatio: string
   AudioCompletionRatio: string
   ExposeRatioEnabled: boolean
@@ -274,6 +275,7 @@ export type BillingSettings = {
   CompletionRatio: string
   ImageRatio: string
   VideoSecondPrice: string
+  VideoPriceTiers: string
   AudioRatio: string
   AudioCompletionRatio: string
   ExposeRatioEnabled: boolean

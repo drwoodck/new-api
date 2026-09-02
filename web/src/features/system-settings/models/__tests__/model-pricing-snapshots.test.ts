@@ -33,6 +33,7 @@ const emptyMaps = {
   completionRatio: '{}',
   imageRatio: '{}',
   videoSecondPrice: '{}',
+  videoPriceTiers: '{}',
   audioRatio: '{}',
   audioCompletionRatio: '{}',
   billingMode: '{}',
@@ -144,5 +145,20 @@ describe('buildModelSnapshots billing mode classification', () => {
     })
 
     assert.equal(row.billingMode, 'tiered_expr')
+  })
+})
+
+describe('buildModelSnapshots tier pricing classification', () => {
+  test('classifies a model with a tier table as per-tier, ahead of per-second', () => {
+    const [row] = buildModelSnapshots({
+      ...emptyMaps,
+      videoSecondPrice: '{"sora-2":0.1}',
+      videoPriceTiers:
+        '{"sora-2":[{"label":"720P","tier_type":"resolution","key":"720p","billing_unit":"second","price":0.75}]}',
+    })
+
+    assert.equal(row.billingMode, 'per-tier')
+    assert.equal(getModeLabel(row.billingMode), 'Per-tier')
+    assert.equal(row.priceTiers?.length, 1)
   })
 })

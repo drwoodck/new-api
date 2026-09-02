@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import * as z from 'zod'
 
+import type { PriceTier } from '@/features/models/types'
 import { combineBillingExpr } from '@/features/pricing/lib/billing-expr'
 
 import { formatPricingNumber } from './pricing-format'
@@ -40,7 +41,12 @@ export type ModelPricingFormValues = z.infer<
   ReturnType<typeof createModelPricingSchema>
 >
 
-export type PricingMode = 'per-token' | 'per-request' | 'per-second' | 'tiered_expr'
+export type PricingMode =
+  | 'per-token'
+  | 'per-request'
+  | 'per-second'
+  | 'per-tier'
+  | 'tiered_expr'
 
 export type LaneKey =
   | 'completion'
@@ -64,6 +70,8 @@ export type ModelRatioData = {
   billingMode?: PricingMode
   billingExpr?: string
   requestRuleExpr?: string
+  /** 档位表（全局 option VideoPriceTiers 里该模型的档表）。非空 = 档位计费。 */
+  priceTiers?: PriceTier[] | null
 }
 
 export type PreviewRow = {
@@ -217,7 +225,8 @@ export function buildPreviewRows(
   promptPrice: string,
   lanePrices: Record<LaneKey, string>,
   laneEnabled: Record<LaneKey, boolean>,
-  t: (key: string) => string
+  t: (key: string) => string,
+  priceTiers: PriceTier[] | null = null
 ): PreviewRow[] {
   if (mode === 'tiered_expr') {
     const effectiveExpr = combineBillingExpr(billingExpr, requestRuleExpr)
@@ -229,6 +238,19 @@ export function buildPreviewRows(
         value: effectiveExpr || t('Empty'),
         multiline: true,
       },
+    ]
+  }
+
+  if (mode === 'per-tier') {
+    const summary = (priceTiers ?? [])
+      .map(
+        (tier) =>
+          `${tier.label || tier.key || t('默认档')} $${tier.price}${tier.billing_unit === 'second' ? ` / ${t('second')}` : ` / ${t('request')}`}`
+      )
+      .join(' · ')
+    return [
+      { key: 'mode', label: 'BillingMode', value: 'per-tier' },
+      { key: 'tiers', label: t('Tiers'), value: summary || t('Empty') },
     ]
   }
 

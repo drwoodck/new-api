@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { splitBillingExprAndRequestRules } from '@/features/pricing/lib/billing-expr'
 
+import type { PriceTier } from '@/features/models/types'
 import { safeJsonParse } from '../utils/json-parser'
 import { formatPricingNumber } from './pricing-format'
 
@@ -29,6 +30,7 @@ export type ModelPricingSnapshotInput = {
   completionRatio: string
   imageRatio: string
   videoSecondPrice: string
+  videoPriceTiers: string
   audioRatio: string
   audioCompletionRatio: string
   billingMode: string
@@ -44,6 +46,7 @@ export type ModelPricingSnapshot = {
   completionRatio?: string
   imageRatio?: string
   videoSecondPrice?: string
+  priceTiers?: PriceTier[] | null
   audioRatio?: string
   audioCompletionRatio?: string
   billingMode?: string
@@ -66,6 +69,7 @@ export const hasPricingValue = (value?: string) =>
 export const isBasePricingUnset = (snapshot?: ModelPricingSnapshot) =>
   !snapshot ||
   (snapshot.billingMode !== 'tiered_expr' &&
+    snapshot.billingMode !== 'per-tier' &&
     !hasPricingValue(snapshot.price) &&
     !hasPricingValue(snapshot.ratio) &&
     !hasPricingValue(snapshot.videoSecondPrice))
@@ -86,6 +90,7 @@ const ratioToPrice = (ratio?: string, denominator?: string) => {
 export const getModeLabel = (mode?: string) => {
   if (mode === 'per-request') return 'Per-request'
   if (mode === 'per-second') return 'Per-second'
+  if (mode === 'per-tier') return 'Per-tier'
   if (mode === 'tiered_expr') return 'Expression'
   return 'Per-token'
 }
@@ -95,14 +100,20 @@ export const getModeVariant = (
 ): 'warning' | 'info' | 'success' | 'purple' => {
   if (mode === 'per-request') return 'warning'
   if (mode === 'per-second') return 'purple'
+  if (mode === 'per-tier') return 'purple'
   if (mode === 'tiered_expr') return 'info'
   return 'success'
 }
 
 // classifyBillingMode 决定非 tiered_expr 模型的计费模式。
-// 按秒单价优先于按次单价：后端 GetVideoSecondPrice 命中时会直接返回，
-// 忽略 price/ratio，前端展示必须与之一致。
-const classifyBillingMode = (videoSecondPrice: string, price: string) => {
+// 档位表优先于按秒单价，按秒单价又优先于按次单价：与后端
+// ModelPriceHelperPerCall 的判定顺序一致，前端展示必须与之对齐。
+const classifyBillingMode = (
+  priceTiers: PriceTier[] | null,
+  videoSecondPrice: string,
+  price: string
+) => {
+  if (priceTiers && priceTiers.length > 0) return 'per-tier'
   if (videoSecondPrice !== '') return 'per-second'
   if (price !== '') return 'per-request'
   return 'per-token'
@@ -125,6 +136,12 @@ export const getPriceSummary = (
 ) => {
   if (row.billingMode === 'tiered_expr') {
     return getExpressionSummary(row, t)
+  }
+  if (row.billingMode === 'per-tier') {
+    const count = row.priceTiers?.length ?? 0
+    return count > 0
+      ? `${t('Tiered pricing')} · ${count} ${t('tiers')}`
+      : t('Unset price')
   }
   // 按秒计费优先于按次/按量展示：单价语义不同（$/秒 而非 $/次）
   if (hasPricingValue(row.videoSecondPrice)) {
@@ -160,6 +177,13 @@ export const getPriceDetail = (
       ? t('Includes request rules')
       : t('Expression based')
   }
+  if (row.billingMode === 'per-tier') {
+    const parts = (row.priceTiers ?? []).slice(0, 2).map((tier) => {
+      const unit = tier.billing_unit === 'second' ? t('second') : t('request')
+      return `${tier.label || tier.key || t('默认档')} $${tier.price}/${unit}`
+    })
+    return parts.length > 0 ? parts.join(' · ') : t('Tier based')
+  }
   if (hasPricingValue(row.videoSecondPrice)) {
     return t('Billed by video duration')
   }
@@ -192,6 +216,7 @@ export const buildModelSnapshots = ({
   completionRatio,
   imageRatio,
   videoSecondPrice,
+  videoPriceTiers,
   audioRatio,
   audioCompletionRatio,
   billingMode,
@@ -225,6 +250,10 @@ export const buildModelSnapshots = ({
     videoSecondPrice,
     { fallback: {}, context: 'video per-second prices' }
   )
+  const videoPriceTiersMap = safeJsonParse<Record<string, PriceTier[]>>(
+    videoPriceTiers,
+    { fallback: {}, context: 'video tier prices' }
+  )
   const audioMap = safeJsonParse<Record<string, number>>(audioRatio, {
     fallback: {},
     context: 'audio ratios',
@@ -250,13 +279,14 @@ export const buildModelSnapshots = ({
     ...Object.keys(completionMap),
     ...Object.keys(imageMap),
     ...Object.keys(videoSecondMap),
+    ...Object.keys(videoPriceTiersMap),
     ...Object.keys(audioMap),
     ...Object.keys(audioCompletionMap),
     ...Object.keys(billingModeMap),
     ...Object.keys(billingExprMap),
   ])
 
-  return Array.from(modelNames).map((name) => {
+  return [...modelNames].map((name) => {
     const price = priceMap[name]?.toString() || ''
     const ratio = ratioMap[name]?.toString() || ''
     const cache = cacheMap[name]?.toString() || ''
@@ -264,6 +294,7 @@ export const buildModelSnapshots = ({
     const completion = completionMap[name]?.toString() || ''
     const image = imageMap[name]?.toString() || ''
     const videoSecond = videoSecondMap[name]?.toString() || ''
+    const priceTiers = videoPriceTiersMap[name] ?? null
     const audio = audioMap[name]?.toString() || ''
     const audioCompletion = audioCompletionMap[name]?.toString() || ''
 
@@ -284,6 +315,7 @@ export const buildModelSnapshots = ({
         completionRatio: completion,
         imageRatio: image,
         videoSecondPrice: videoSecond,
+        priceTiers,
         audioRatio: audio,
         audioCompletionRatio: audioCompletion,
         hasConflict: false,
@@ -299,9 +331,10 @@ export const buildModelSnapshots = ({
       completionRatio: completion,
       imageRatio: image,
       videoSecondPrice: videoSecond,
+      priceTiers,
       audioRatio: audio,
       audioCompletionRatio: audioCompletion,
-      billingMode: classifyBillingMode(videoSecond, price),
+      billingMode: classifyBillingMode(priceTiers, videoSecond, price),
       // 按秒计费与按次单价并存属于误配：两者都定义了「一次调用多少钱」
       hasConflict:
         (price !== '' &&
@@ -327,6 +360,7 @@ export const getSnapshotSignature = (snapshot?: ModelPricingSnapshot) => {
     completionRatio: snapshot.completionRatio || '',
     imageRatio: snapshot.imageRatio || '',
     videoSecondPrice: snapshot.videoSecondPrice || '',
+    priceTiers: snapshot.priceTiers ?? null,
     audioRatio: snapshot.audioRatio || '',
     audioCompletionRatio: snapshot.audioCompletionRatio || '',
     billingMode: snapshot.billingMode || 'per-token',

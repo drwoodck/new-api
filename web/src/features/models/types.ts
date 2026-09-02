@@ -41,7 +41,35 @@ export interface ModelGroupPrice {
   model_ratio?: number | null
   completion_ratio?: number | null
   model_price?: number | null
+  /** 档位表：非空时该分组的计费以档位为准（每档可独立选 second/request）。 */
+  price_tiers?: PriceTierList | null
 }
+
+// ============================================================================
+// Tier Pricing (档位计费) Types — 对齐 Go `types.PriceTier`
+// ============================================================================
+
+export type PriceTierType = 'request' | 'resolution' | 'image_size' | 'mode'
+
+export type PriceTierUnit = 'second' | 'request'
+
+/**
+ * 档位表里的一档。tier_type 决定按什么维度分档（一张表内必须一致），
+ * billing_unit 决定该档按秒还是按次计价。
+ *
+ * key 约定：resolution 小写（720p/1080p/4k）；image_size 大写（1K/2K/4K）；
+ * request 为 "Ns" 或空字符串（空 = 任意请求固定价，对齐 paipu 渠道1 语义）；
+ * mode 原样。
+ */
+export interface PriceTier {
+  label: string
+  tier_type: PriceTierType
+  key: string
+  billing_unit: PriceTierUnit
+  price: number
+}
+
+export type PriceTierList = PriceTier[]
 
 /**
  * Model entity from API

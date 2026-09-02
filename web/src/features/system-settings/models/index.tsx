@@ -50,6 +50,7 @@ const defaultModelSettings: ModelSettings = {
   CompletionRatio: '',
   ImageRatio: '',
   VideoSecondPrice: '',
+  VideoPriceTiers: '{}',
   AudioRatio: '',
   AudioCompletionRatio: '',
   ExposeRatioEnabled: false,

@@ -84,7 +84,8 @@ import { safeJsonParse } from '@/features/system-settings/utils/json-parser'
 import { createModel, updateModel, getModel, getVendors } from '../../api'
 import { getNameRuleOptions, ENDPOINT_TEMPLATES } from '../../constants'
 import { modelsQueryKeys, vendorsQueryKeys, parseModelTags } from '../../lib'
-import type { Model, ModelGroupPrice } from '../../types'
+import type { Model, ModelGroupPrice, PriceTierList } from '../../types'
+import { TierPriceEditor } from '@/features/system-settings/models/tier-price-editor'
 
 // Only exact-match rows can carry per-group prices — a prefix/suffix/contains
 // row represents many billed names at once (see validateGroupPricingNameRule
@@ -99,10 +100,20 @@ type GroupPriceRow = {
   modelRatio: string
   completionRatio: string
   modelPrice: string
+  priceTiers: PriceTierList | null
+  // 档表校验错误（与后端 NormalizePriceTierList 对齐）。非空时阻止保存。
+  tierErrors: string[]
 }
 
 function emptyGroupPriceRow(groupName: string): GroupPriceRow {
-  return { groupName, modelRatio: '', completionRatio: '', modelPrice: '' }
+  return {
+    groupName,
+    modelRatio: '',
+    completionRatio: '',
+    modelPrice: '',
+    priceTiers: null,
+    tierErrors: [],
+  }
 }
 
 // group_prices (API/DB shape) -> GroupPriceRow[] (editor state), keyed by the
@@ -124,6 +135,8 @@ function toGroupPriceRows(
       completionRatio:
         row.completion_ratio != null ? String(row.completion_ratio) : '',
       modelPrice: row.model_price != null ? String(row.model_price) : '',
+      priceTiers: row.price_tiers ?? null,
+      tierErrors: [],
     }
   })
 }
@@ -137,12 +150,17 @@ function fromGroupPriceRows(rows: GroupPriceRow[]): ModelGroupPrice[] {
     const hasPrice = row.modelPrice.trim() !== ''
     const hasRatio =
       row.modelRatio.trim() !== '' || row.completionRatio.trim() !== ''
-    if (!hasPrice && !hasRatio) continue
+    const hasTiers = (row.priceTiers?.length ?? 0) > 0
+    if (!hasPrice && !hasRatio && !hasTiers) continue
     const entry: ModelGroupPrice = { group_name: row.groupName }
-    // Fixed price wins outright at billing time, same precedence as the
-    // existing global price-vs-ratio split (see ModelPriceHelper) — mirror it
-    // here so per-group rows carry only the fields billing actually reads.
-    if (hasPrice) {
+    // 档位表优先于标量（后端 ResolveTierPrice 的优先级矩阵）——配了档表的
+    // 分组行只携带档表字段。
+    if (hasTiers) {
+      entry.price_tiers = row.priceTiers
+    } else if (hasPrice) {
+      // Fixed price wins outright at billing time, same precedence as the
+      // existing global price-vs-ratio split (see ModelPriceHelper) — mirror it
+      // here so per-group rows carry only the fields billing actually reads.
       entry.model_price = Number.parseFloat(row.modelPrice)
     } else {
       if (row.modelRatio.trim() !== '') {
@@ -387,6 +405,7 @@ export function ModelMutateDrawer({
       CompletionRatio: '',
       ImageRatio: '',
       VideoSecondPrice: '',
+      VideoPriceTiers: '{}',
       AudioRatio: '',
       AudioCompletionRatio: '',
       ExposeRatioEnabled: false,
@@ -584,6 +603,20 @@ export function ModelMutateDrawer({
         toast.error(
           t(
             '分组分别定价仅支持精确匹配的模型，请先将匹配规则改为精确匹配，或关闭分组分别定价。'
+          )
+        )
+        return
+      }
+
+      // 档位表校验与后端 NormalizePriceTierList 对齐：任一分组行有硬错误
+      // 就阻止保存（行内 Alert 已展示具体原因）。
+      const tierErrorRows = groupPriceRows.filter(
+        (row) => row.tierErrors.length > 0
+      )
+      if (groupPricingEnabled && tierErrorRows.length > 0) {
+        toast.error(
+          t(
+            `分组「${tierErrorRows[0].groupName}」的档位表校验未通过，请先在行内修复后保存。`
           )
         )
         return
@@ -1175,13 +1208,14 @@ export function ModelMutateDrawer({
                         <span>{t('Completion ratio')}</span>
                       </div>
                       {groupPriceRows.map((row) => (
-                        <div
+                        <Collapsible
                           key={row.groupName}
-                          className='grid grid-cols-[1fr_1fr_1fr_1fr] items-center gap-2'
+                          className='space-y-2 rounded-md border p-2'
                         >
-                          <span className='text-sm font-medium'>
-                            {row.groupName}
-                          </span>
+                          <div className='grid grid-cols-[1fr_1fr_1fr_1fr_auto] items-center gap-2'>
+                            <span className='text-sm font-medium'>
+                              {row.groupName}
+                            </span>
                           <Input
                             type='text'
                             placeholder='0.01'
@@ -1232,7 +1266,42 @@ export function ModelMutateDrawer({
                               )
                             }}
                           />
-                        </div>
+                            <CollapsibleTrigger className='inline-flex items-center justify-center rounded-md border px-2 py-1 text-xs font-medium'>
+                              <ChevronDown className='mr-1 h-4 w-4' />
+                              {t('档位表')}
+                              {row.priceTiers && row.priceTiers.length > 0
+                                ? ` ×${row.priceTiers.length}`
+                                : ''}
+                            </CollapsibleTrigger>
+                          </div>
+                          <CollapsibleContent className='space-y-2'>
+                            <TierPriceEditor
+                              compact
+                              value={row.priceTiers}
+                              onChange={(tiers) =>
+                                setGroupPriceRows((prev) =>
+                                  prev.map((r) =>
+                                    r.groupName === row.groupName
+                                      ? { ...r, priceTiers: tiers }
+                                      : r
+                                  )
+                                )
+                              }
+                              onValidationChange={(validation) =>
+                                setGroupPriceRows((prev) =>
+                                  prev.map((r) =>
+                                    r.groupName === row.groupName
+                                      ? {
+                                          ...r,
+                                          tierErrors: validation.errors,
+                                        }
+                                      : r
+                                  )
+                                )
+                              }
+                            />
+                          </CollapsibleContent>
+                        </Collapsible>
                       ))}
                       <p className='text-muted-foreground text-xs'>
                         {t(

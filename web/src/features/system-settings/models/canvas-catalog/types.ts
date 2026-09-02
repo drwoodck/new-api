@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 // 对应 Go 端 model.CanvasCatalogModel (model/canvas_catalog.go)。
+import type { PriceTier } from '@/features/models/types'
+
 export type CanvasCatalogModel = {
   id: number
   remote_id: string
@@ -63,4 +65,6 @@ export type CanvasCatalogOverviewGroupPrice = {
   // null = 分别定价模式下这个分组没配置价格(不可用)。区分 null 与 0 ——
   // 0 是"这个分组免费",null 是"没配置",两者语义不同,渲染时不能混用。
   price: number | null
+  // 档位计费的档表。非空时该分组的计费以档表为准，展示"档表 ×N"徽章。
+  price_tiers?: PriceTier[] | null
 }

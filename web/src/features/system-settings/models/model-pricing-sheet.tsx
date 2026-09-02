@@ -81,7 +81,10 @@ import {
 } from './model-pricing-core'
 import { PriceInput, PriceLane } from './model-pricing-inputs'
 import { formatPricingNumber } from './pricing-format'
+import { TierPriceEditor } from './tier-price-editor'
 import { TieredPricingEditor } from './tiered-pricing-editor'
+
+import type { PriceTier } from '@/features/models/types'
 
 export type { ModelRatioData } from './model-pricing-core'
 
@@ -96,8 +99,10 @@ type ModelPricingSheetProps = {
 // resolveEditorPricingMode 决定编辑器打开时定位到哪个计费模式 tab。
 // 顺序与 buildModelSnapshots 的分类逻辑保持一致，否则按秒计费的模型会
 // 落到错误的 tab，导致每秒单价输入框不可见。
+// 档位表（per-tier）在按秒判定之前 —— 后端档位计费优先于旧按秒单值。
 const resolveEditorPricingMode = (data: ModelRatioData): PricingMode => {
   if (data.billingMode === 'tiered_expr') return 'tiered_expr'
+  if (data.priceTiers && data.priceTiers.length > 0) return 'per-tier'
   if (data.videoSecondPrice) return 'per-second'
   if (data.price) return 'per-request'
   return 'per-token'
@@ -165,6 +170,11 @@ export const ModelPricingEditorPanel = forwardRef<
   })
   const [billingExpr, setBillingExpr] = useState('')
   const [requestRuleExpr, setRequestRuleExpr] = useState('')
+  const [priceTiers, setPriceTiers] = useState<PriceTier[] | null>(null)
+  const [tierValidation, setTierValidation] = useState<{
+    errors: string[]
+    warnings: string[]
+  }>({ errors: [], warnings: [] })
   const [editorReloadToken, setEditorReloadToken] = useState(0)
   const isEditMode = !!editData
 
@@ -203,6 +213,7 @@ export const ModelPricingEditorPanel = forwardRef<
       setPricingMode(resolveEditorPricingMode(editData))
       setBillingExpr(editData.billingExpr || '')
       setRequestRuleExpr(editData.requestRuleExpr || '')
+      setPriceTiers(editData.priceTiers ?? null)
     } else {
       form.reset({
         name: '',
@@ -219,6 +230,7 @@ export const ModelPricingEditorPanel = forwardRef<
       setPricingMode('per-token')
       setBillingExpr('')
       setRequestRuleExpr('')
+      setPriceTiers(null)
     }
 
     setPromptPrice(nextLaneState.promptPrice)
@@ -358,12 +370,14 @@ export const ModelPricingEditorPanel = forwardRef<
         promptPrice,
         lanePrices,
         laneEnabled,
-        t
+        t,
+        priceTiers
       ),
     [
       billingExpr,
       laneEnabled,
       lanePrices,
+      priceTiers,
       pricingMode,
       promptPrice,
       requestRuleExpr,
@@ -451,8 +465,13 @@ export const ModelPricingEditorPanel = forwardRef<
       return false
     }
 
+    // 档位表校验未通过（与后端 NormalizePriceTierList 对齐）时阻止保存
+    if (pricingMode === 'per-tier' && tierValidation.errors.length > 0) {
+      return false
+    }
+
     return true
-  }, [form, laneEnabled, lanePrices, pricingMode, promptPrice, t])
+  }, [form, laneEnabled, lanePrices, pricingMode, promptPrice, t, tierValidation])
 
   const buildSubmitData = useCallback(
     (values: ModelPricingFormValues) => {
@@ -468,6 +487,7 @@ export const ModelPricingEditorPanel = forwardRef<
         videoSecondPrice: values.videoSecondPrice || '',
         audioRatio: values.audioRatio || '',
         audioCompletionRatio: values.audioCompletionRatio || '',
+        priceTiers,
       }
 
       if (pricingMode === 'tiered_expr') {
@@ -477,7 +497,7 @@ export const ModelPricingEditorPanel = forwardRef<
 
       return data
     },
-    [billingExpr, pricingMode, requestRuleExpr]
+    [billingExpr, pricingMode, priceTiers, requestRuleExpr]
   )
 
   useImperativeHandle(
@@ -561,7 +581,7 @@ export const ModelPricingEditorPanel = forwardRef<
                   onValueChange={handleModeChange}
                   className='gap-4'
                 >
-                  <TabsList className='grid w-full grid-cols-4'>
+                  <TabsList className='grid w-full grid-cols-5'>
                     <TabsTrigger value='per-token'>
                       {t('Per-token')}
                     </TabsTrigger>
@@ -570,6 +590,9 @@ export const ModelPricingEditorPanel = forwardRef<
                     </TabsTrigger>
                     <TabsTrigger value='per-second'>
                       {t('Per-second')}
+                    </TabsTrigger>
+                    <TabsTrigger value='per-tier'>
+                      {t('Per-tier')}
                     </TabsTrigger>
                     <TabsTrigger value='tiered_expr'>
                       {t('Expression')}
@@ -697,6 +720,19 @@ export const ModelPricingEditorPanel = forwardRef<
                               <FormMessage />
                             </Field>
                           </FormItem>
+                        )}
+                      />
+                    </FieldGroup>
+                  </TabsContent>
+
+                  <TabsContent value='per-tier' className='pt-0'>
+                    <FieldGroup className='gap-5'>
+                      <TierPriceEditor
+                        value={priceTiers}
+                        onChange={setPriceTiers}
+                        onValidationChange={setTierValidation}
+                        clearHint={t(
+                          '清空档位表将删除该模型的档位定价。'
                         )}
                       />
                     </FieldGroup>

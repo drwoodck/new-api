@@ -108,14 +108,25 @@ export function CanvasCatalogOverviewTable(
               {r.group_prices.length === 0 ? (
                 <span className='text-muted-foreground text-xs'>--</span>
               ) : (
-                r.group_prices.map((gp) => (
-                  <StatusBadge
-                    key={gp.group_name}
-                    label={`${gp.group_name}: ${formatGroupPrice(t, gp.price)}`}
-                    variant={gp.price == null ? 'warning' : 'neutral'}
-                    copyable={false}
-                  />
-                ))
+                r.group_prices.map((gp) => {
+                  const tierCount = gp.price_tiers?.length ?? 0
+                  const label =
+                    tierCount > 0
+                      ? `${gp.group_name}: ${t('档表')} ×${tierCount}`
+                      : `${gp.group_name}: ${formatGroupPrice(t, gp.price)}`
+                  return (
+                    <StatusBadge
+                      key={gp.group_name}
+                      label={label}
+                      variant={
+                        gp.price == null && tierCount === 0
+                          ? 'warning'
+                          : 'neutral'
+                      }
+                      copyable={false}
+                    />
+                  )
+                })
               )}
             </BadgeCell>
           ),

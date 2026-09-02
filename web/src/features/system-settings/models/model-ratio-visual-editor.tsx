@@ -47,6 +47,7 @@ import {
   useDataTable,
 } from '@/components/data-table'
 import { Button } from '@/components/ui/button'
+import type { PriceTier } from '@/features/models/types'
 import { combineBillingExpr } from '@/features/pricing/lib/billing-expr'
 import { useMediaQuery } from '@/hooks'
 
@@ -74,6 +75,7 @@ type ModelRatioVisualEditorProps = {
   savedCompletionRatio: string
   savedImageRatio: string
   savedVideoSecondPrice: string
+  savedVideoPriceTiers: string
   savedAudioRatio: string
   savedAudioCompletionRatio: string
   savedBillingMode: string
@@ -85,6 +87,7 @@ type ModelRatioVisualEditorProps = {
   completionRatio: string
   imageRatio: string
   videoSecondPrice: string
+  videoPriceTiers: string
   audioRatio: string
   audioCompletionRatio: string
   billingMode: string
@@ -115,6 +118,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     savedCompletionRatio,
     savedImageRatio,
     savedVideoSecondPrice,
+    savedVideoPriceTiers,
     savedAudioRatio,
     savedAudioCompletionRatio,
     savedBillingMode,
@@ -126,6 +130,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     completionRatio,
     imageRatio,
     videoSecondPrice,
+    videoPriceTiers,
     audioRatio,
     audioCompletionRatio,
     billingMode,
@@ -201,6 +206,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       completionRatio: savedCompletionRatio,
       imageRatio: savedImageRatio,
       videoSecondPrice: savedVideoSecondPrice,
+      videoPriceTiers: savedVideoPriceTiers,
       audioRatio: savedAudioRatio,
       audioCompletionRatio: savedAudioCompletionRatio,
       billingMode: savedBillingMode,
@@ -214,6 +220,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       completionRatio,
       imageRatio,
       videoSecondPrice,
+      videoPriceTiers,
       audioRatio,
       audioCompletionRatio,
       billingMode,
@@ -258,6 +265,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     savedCompletionRatio,
     savedImageRatio,
     savedVideoSecondPrice,
+    savedVideoPriceTiers,
     savedAudioRatio,
     savedAudioCompletionRatio,
     savedBillingMode,
@@ -269,6 +277,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     completionRatio,
     imageRatio,
     videoSecondPrice,
+    videoPriceTiers,
     audioRatio,
     audioCompletionRatio,
     billingMode,
@@ -314,6 +323,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
         completionRatio: editableModel.completionRatio,
         imageRatio: editableModel.imageRatio,
         videoSecondPrice: editableModel.videoSecondPrice,
+        priceTiers: editableModel.priceTiers ?? null,
         audioRatio: editableModel.audioRatio,
         audioCompletionRatio: editableModel.audioCompletionRatio,
         billingMode: editBillingMode,
@@ -394,6 +404,10 @@ const ModelRatioVisualEditorComponent = forwardRef<
         videoSecondPrice,
         { fallback: {}, silent: true }
       )
+      const videoPriceTiersMap = safeJsonParse<Record<string, PriceTier[]>>(
+        videoPriceTiers,
+        { fallback: {}, silent: true }
+      )
 
       delete priceMap[name]
       delete ratioMap[name]
@@ -402,6 +416,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       delete completionMap[name]
       delete imageMap[name]
       delete videoSecondMap[name]
+      delete videoPriceTiersMap[name]
       delete audioMap[name]
       delete audioCompletionMap[name]
       delete billingModeMap[name]
@@ -414,6 +429,10 @@ const ModelRatioVisualEditorComponent = forwardRef<
       onChange('CompletionRatio', JSON.stringify(completionMap, null, 2))
       onChange('ImageRatio', JSON.stringify(imageMap, null, 2))
       onChange('VideoSecondPrice', JSON.stringify(videoSecondMap, null, 2))
+      onChange(
+        'VideoPriceTiers',
+        JSON.stringify(videoPriceTiersMap, null, 2)
+      )
       onChange('AudioRatio', JSON.stringify(audioMap, null, 2))
       onChange(
         'AudioCompletionRatio',
@@ -442,6 +461,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       completionRatio,
       imageRatio,
       videoSecondPrice,
+      videoPriceTiers,
       audioRatio,
       audioCompletionRatio,
       billingMode,
@@ -525,6 +545,10 @@ const ModelRatioVisualEditorComponent = forwardRef<
         videoSecondPrice,
         { fallback: {}, silent: true }
       )
+      const videoPriceTiersMap = safeJsonParse<Record<string, PriceTier[]>>(
+        videoPriceTiers,
+        { fallback: {}, silent: true }
+      )
       const audioMap = safeJsonParse<Record<string, number>>(audioRatio, {
         fallback: {},
         silent: true,
@@ -560,10 +584,24 @@ const ModelRatioVisualEditorComponent = forwardRef<
         delete completionMap[name]
         delete imageMap[name]
         delete videoSecondMap[name]
+        delete videoPriceTiersMap[name]
         delete audioMap[name]
         delete audioCompletionMap[name]
         delete billingModeMap[name]
         delete billingExprMap[name]
+
+        // 档位表与按秒计费同样是独立的计费维度，无论走哪个分支都要写回；
+        // 清空档表 = 从 map 删除该模型（与后端空档表丢弃语义一致）。
+        const tierMode = Boolean(data.priceTiers && data.priceTiers.length > 0)
+        if (tierMode) {
+          videoPriceTiersMap[name] = data.priceTiers as NonNullable<
+            typeof data.priceTiers
+          >
+          // 档位模式独占：ModelPrice/VideoSecondPrice 等旧标量已在上面
+          // delete，这里不写回 —— 与后端"档表优先"矩阵对齐，避免将来
+          // 清档表后旧标量复活造成价格漂移。
+          return
+        }
 
         // 按秒计费是独立的计费维度（视频时长），与 token/按次分支无关，
         // 因此无论走哪个分支都要写回。
@@ -610,6 +648,10 @@ const ModelRatioVisualEditorComponent = forwardRef<
       onChange('CompletionRatio', JSON.stringify(completionMap, null, 2))
       onChange('ImageRatio', JSON.stringify(imageMap, null, 2))
       onChange('VideoSecondPrice', JSON.stringify(videoSecondMap, null, 2))
+      onChange(
+        'VideoPriceTiers',
+        JSON.stringify(videoPriceTiersMap, null, 2)
+      )
       onChange('AudioRatio', JSON.stringify(audioMap, null, 2))
       onChange(
         'AudioCompletionRatio',
@@ -632,6 +674,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       completionRatio,
       imageRatio,
       videoSecondPrice,
+      videoPriceTiers,
       audioRatio,
       audioCompletionRatio,
       billingMode,
