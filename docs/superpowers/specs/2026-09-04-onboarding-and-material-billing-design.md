@@ -125,16 +125,29 @@ type InputMaterialPriceList []InputMaterialPrice // Valuer/Scanner,存 text JSON
   2. 待定价:abilities 有但无任何价格配置(ModelPrice/Ratio/Tiers/秒价/素材价全无)
   3. 待上线目录:起草态(enabled=false)目录条目
 - 后端:`GET /api/onboarding/overview` 聚合;`POST /api/onboarding/launch`(单/批量,校验已定价,未定价需显式 force + 前端二次确认);`POST /api/onboarding/ignore`(忽略名单,option 存储)
-- 每模型一张**审核卡**:来源渠道、三态检查清单、capability/contract 下拉(受支持列表+自动推导)、价格文案自动预览、说明带出 models.Description、deep-link 定价编辑
+- 每模型一张**审核卡**:来源渠道、三态检查清单、capability/contract 下拉(受支持列表+自动推导)、价格文案自动预览、说明带出 models.Description、deep-link 定价编辑;**字段自动预填自上游 `/api/pricing`(见 3.6),含计费草稿/说明/vendor,管理端仅核对+开闸**
 - 操作:**开闸**(meta status 置上线 + 目录 enabled=true)/ 编辑(打开对应抽屉)/ 忽略;支持批量开闸
 - 巡检起草条目自动进入第三列;开闸后从待办消失
 
-### 3.6 说明统一 + 保存 bug 修复(需求 4)
+### 3.6 上游定价/元数据自动拉取预填(工作台提效关键)
+
+**现状**:`controller/ratio_sync.go` `FetchUpstreamRatios` 已支持 4 种上游格式(type1 `/api/ratio_config`、**type2 `/api/pricing`**、type3 OpenRouter、type4 models.dev),type2 已提取 model_name/quota_type/model_ratio/model_price/completion_ratio/cache/image/audio/billing_expr,并具备 10MB 限读、3 次重试、并发上限等护栏;但仅被"上游倍率同步"页手动使用,且未解析新版 `/api/pricing` 已有的 `video_second_price`/`price_tiers`/`description`/vendor 等字段。
+
+**设计**:
+
+- 把 ratio_sync 的上游拉取机制抽为可复用服务(保留按模型原始条目的形态,不折叠成倍率 map),type2 解析扩展:`video_second_price`、`price_tiers`(经 `NormalizePriceTierList` 校验)、`description`、vendor/tags/icon、`enable_groups`
+- 工作台审核卡**自动预填**:渠道有 base_url 时拉取该上游 `/api/pricing`,按模型名匹配——计费草稿(quota_type→按次价或倍率组、秒价、分档表、tiered_expr)、说明草稿(→ models.Description 真源)、vendor/图标草稿;卡片标注来源"来自上游 ××"
+- 触发时机:(a) 巡检起草时顺带拉取(超时受限、失败不阻塞起草);(b) 工作台卡片"重新拉取"按钮;(c) 新增渠道后的首次巡检自然覆盖
+- **草稿不落库**:预填数据实时拉取 + 短缓存(内存/Redis TTL),仅在开闸时写入正式配置,避免草稿态一致性管理
+- **上游数据不可信**:数值一律过现有价格边界(MaxTierPrice 同级)、tier 表规范化、billing_expr 编译冒烟(复用保存时校验);沿用 ratio_sync 的 confidence 哨兵(37.5/1.0)标记可疑数据;外呼护栏沿用 ratio_sync 既有实现
+- **对称输出**:本站 `/api/pricing` 在素材计费上线后同步暴露 `input_material_prices` 与素材时长语义,使下游中转站也能预填(与本项目保护 new-api 品牌的方向一致)
+
+### 3.7 说明统一 + 保存 bug 修复(需求 4)
 
 - Bug 修复:目录编辑对话框打开时先 `GET /api/canvas/admin/models/:id` 拉全量再渲染——一次性杜绝 description/pricing/limitations/param_schema/schema_override/requires_vocab/sort_order 被空值覆盖
 - 真源统一为 `models.Description`(用户端定价页已在用):目录表单说明区改只读带出 + "去模型管理页编辑"链接;wire 下发优先 meta.Description,无 meta 行回退目录存量列(列保留仅兼容旧数据);目录 CRUD 不再接受 description 写入(入参忽略,保持旧客户端兼容)
 
-### 3.7 目录表单简化(需求 3 表单端)
+### 3.8 目录表单简化(需求 3 表单端)
 
 - 三区布局:**基础**(remote_id/display_name/capability 下拉/contract 下拉(受支持合约列表,自动推导,保留支持率提示)/enabled 开关)→ **计费**(自动文案预览 + 可覆盖手填 + 定价 deep-link)→ **高级折叠**(param_schema、schema_override 可视化编辑器、requires_vocab、sort_order、limitations)
 - 每个字段带 tooltip:设置方法 + 影响
@@ -148,7 +161,7 @@ type InputMaterialPriceList []InputMaterialPrice // Valuer/Scanner,存 text JSON
 2. **素材计费**:类型/存储迁移(与 3 的两列一次迁移)+ 检测 + 时长探测 + 计费链 + 双计防护 + 测试
 3. **固定价分组化**:秒价分组列接入解析/结算 + 前端编辑器
 4. **定价文案**:自动生成 + wire/pricing_source + 徽标 + deep-link
-5. **上新工作台**:巡检起草 + 聚合/开闸/忽略接口 + 工作台页面 + 模型管理页"全部起草"
+5. **上新工作台**:巡检起草 + 聚合/开闸/忽略接口 + 工作台页面 + 模型管理页"全部起草" + 上游 `/api/pricing` 拉取预填(ratio_sync 服务化复用)
 
 ## 5. 测试策略
 
@@ -157,6 +170,7 @@ type InputMaterialPriceList []InputMaterialPrice // Valuer/Scanner,存 text JSON
 - 计费:图片张数、视频真值/估算/结算修正三分支、分组独立秒价与素材价、豆包双计防护、素材费冻结 + 修正审计、溢出钳制(quota_math 既有风格)
 - 巡检起草:幂等、未知能力留空、开关关闭不写
 - 工作台:三列聚合正确性、开闸校验(未定价需 force)、忽略名单
+- 上游预填:type2 新字段解析、非法 tier 表/价格拒绝、confidence 哨兵、拉取失败不阻塞起草
 - 数据库:SQLite/MySQL/PostgreSQL 三库 AutoMigrate 新列
 - 前端:表单分区、徽标、工作台卡片交互(遵循 `web/AGENTS.md`)
 
