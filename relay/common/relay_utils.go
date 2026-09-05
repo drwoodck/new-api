@@ -321,6 +321,10 @@ func ValidateMultipartDirect(c *gin.Context, info *RelayInfo) *dto.TaskError {
 		return taskErr
 	}
 
+	if taskErr := ValidateInputMaterialCount(req); taskErr != nil {
+		return taskErr
+	}
+
 	action := constant.TaskActionTextGenerate
 	if hasInputReference {
 		action = constant.TaskActionGenerate
@@ -386,13 +390,13 @@ func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *d
 		return taskErr
 	}
 
-	if taskErr := ValidateInputMaterialCount(req); taskErr != nil {
-		return taskErr
-	}
-
 	if len(req.Images) == 0 && strings.TrimSpace(req.Image) != "" {
 		// 兼容单图上传
 		req.Images = []string{req.Image}
+	}
+
+	if taskErr := ValidateInputMaterialCount(req); taskErr != nil {
+		return taskErr
 	}
 
 	storeTaskRequest(c, info, action, req)

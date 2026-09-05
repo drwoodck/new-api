@@ -90,6 +90,6 @@ func ValidateInputMaterialCount(req TaskSubmitReq) *dto.TaskError {
 		return nil
 	}
 	return createTaskError(
-		fmt.Errorf("输入素材数量 %d 超过上限 %d", count, MaxInputMaterialCount),
+		fmt.Errorf("input material count %d exceeds the limit %d", count, MaxInputMaterialCount),
 		"invalid_request", http.StatusBadRequest, true)
 }

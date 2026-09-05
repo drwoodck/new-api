@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -51,6 +52,17 @@ func TestDetectInputMaterials(t *testing.T) {
 			want: []string{"video:data:video/mp4;base64,AAAA"},
 		},
 		{
+			name: "重复URL去重,空串跳过",
+			req: TaskSubmitReq{
+				Images:         []string{"https://a/1.png", "", "https://a/1.png"},
+				InputReference: "https://v/ref.mp4",
+				Metadata: map[string]interface{}{
+					"video_url": "https://v/ref.mp4",
+				},
+			},
+			want: []string{"image:https://a/1.png", "video:https://v/ref.mp4"},
+		},
+		{
 			name: "无素材",
 			req:  TaskSubmitReq{Prompt: "cat"},
 			want: nil,
@@ -87,4 +99,6 @@ func TestValidateInputMaterialCount(t *testing.T) {
 	images = append(images, "https://a/overflow.png")
 	taskErr := ValidateInputMaterialCount(TaskSubmitReq{Images: images})
 	require.NotNil(t, taskErr)
+	assert.Equal(t, "input material count 101 exceeds the limit 100", taskErr.Message)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
 }
