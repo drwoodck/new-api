@@ -74,7 +74,7 @@ func (c *CanvasCatalogModel) Insert() error {
 // 跳过零值字段"的坑——否则 Enabled=false / 空字符串等零值永远无法写回数据库,
 // 且顺带保护 Id/CreatedTime/DeletedAt 不被意外清零。
 //
-// description 不在白名单里:说明真源已统一到 models 表(2026-09-04 spec 3.6),
+// description 不在白名单里:说明真源已统一到 models 表(2026-09-04 spec 3.7),
 // 目录侧对存量文字只读——编辑表单不再携带它,任何 update 都不得覆盖。
 func (c *CanvasCatalogModel) Update() error {
 	c.UpdatedTime = common.GetTimestamp()

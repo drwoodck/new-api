@@ -98,3 +98,23 @@ func TestCanvasCatalogWireFallbackAfterMetaRemoved(t *testing.T) {
 	require.NotNil(t, resp.Models[0].Description)
 	assert.Equal(t, "存量", *resp.Models[0].Description)
 }
+
+// TestCanvasCatalogWireFallsBackWhenMetaDescriptionEmpty 锁住空说明不入 map 的
+// 回退分支:models 行存在但 Description 为空串时,GetModelMetaDescriptionMap
+// 不收录它,下发应回退目录存量说明,而不是把空串当有效说明顶掉存量。
+func TestCanvasCatalogWireFallsBackWhenMetaDescriptionEmpty(t *testing.T) {
+	router := setupCatalogWireTestDB(t)
+
+	require.NoError(t, model.DB.Create(&model.Model{
+		ModelName: "empty-meta", Description: "", Status: 1,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.CanvasCatalogModel{
+		RemoteID: "empty-meta", DisplayName: "Empty Meta",
+		Contract: "relay_video_async_v1", Description: "存量说明",
+	}).Error)
+
+	resp := doGetCatalog(t, router)
+	require.Len(t, resp.Models, 1)
+	require.NotNil(t, resp.Models[0].Description)
+	assert.Equal(t, "存量说明", *resp.Models[0].Description)
+}

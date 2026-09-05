@@ -248,7 +248,7 @@ func TestUpdateCanvasCatalogModelAdminDerivesContractFromCapability(t *testing.T
 
 // TestUpdateCanvasCatalogModelAdminDoesNotOverwriteDescription 锁住说明冻结:
 // 说明真源已迁到 models 表,目录更新不得再用表单空值/旧值覆盖存量 description
-// (2026-09-04 spec 3.6)。存量文字只读,供 wire 在无 models 行时回退。
+// (2026-09-04 spec 3.7)。存量文字只读,供 wire 在无 models 行时回退。
 func TestUpdateCanvasCatalogModelAdminDoesNotOverwriteDescription(t *testing.T) {
 	router := setupCatalogAdminTestDB(t)
 
