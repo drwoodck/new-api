@@ -225,6 +225,16 @@ export function CanvasCatalogFormDialog({
     }
   }
 
+  // schema_override 的校验规则挂在高级设置折叠区内;RHF 默认 shouldUnregister:false,
+  // 该字段规则卸载后仍注册,提交时校验失败但错误 UI 不在 DOM,表现为"点保存没反应"。
+  // 提交失败时展开折叠区,让错误信息可见(handleSubmit 的 onInvalid 回调读取的是
+  // 提交时刻的 formState 快照,此处无需渲染期解构订阅)。
+  const onInvalid = () => {
+    if (form.formState.errors.schema_override) {
+      setShowAdvanced(true)
+    }
+  }
+
   // 拆开写避免嵌套三元(lint 规则 no-nested-ternary)。
   const actionLabel = isEdit ? t('更新') : t('创建')
   const submitLabel = isSaving ? t('保存中...') : actionLabel
@@ -277,7 +287,7 @@ export function CanvasCatalogFormDialog({
         <Form {...form}>
           <form
             id={FORM_ID}
-            onSubmit={form.handleSubmit(onSubmit)}
+            onSubmit={form.handleSubmit(onSubmit, onInvalid)}
             className='space-y-4'
           >
             <FormField
