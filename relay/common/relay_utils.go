@@ -386,6 +386,10 @@ func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *d
 		return taskErr
 	}
 
+	if taskErr := ValidateInputMaterialCount(req); taskErr != nil {
+		return taskErr
+	}
+
 	if len(req.Images) == 0 && strings.TrimSpace(req.Image) != "" {
 		// 兼容单图上传
 		req.Images = []string{req.Image}
