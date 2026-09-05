@@ -171,7 +171,7 @@ func resolveCanvasGroupPrice(remoteID, group string) *canvasGroupPrice {
 // GroupPrice —— 与 groupModels 表达的是同一次"有没有分组信息"判断,
 // 两个参数分开传是因为 GroupVisible 只需要集合、GroupPrice 的计算需要
 // 分组名字符串本身。
-func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, group string) canvasCatalogWireModel {
+func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, group string, metaDescriptions map[string]string) canvasCatalogWireModel {
 	w := canvasCatalogWireModel{
 		RemoteID:      m.RemoteID,
 		DisplayName:   m.DisplayName,
@@ -186,7 +186,11 @@ func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, g
 	if groupModels != nil {
 		_, w.GroupVisible = groupModels[m.RemoteID]
 	}
-	if m.Description != "" {
+	// 说明统一真源(2026-09-04 spec 3.7):优先 models 表的说明,没有该行或
+	// 说明为空时回退目录存量文字(列已冻结,仅旧数据兜底)。
+	if desc := metaDescriptions[m.RemoteID]; desc != "" {
+		w.Description = &desc
+	} else if m.Description != "" {
 		w.Description = &m.Description
 	}
 	if m.Pricing != "" {
@@ -254,6 +258,18 @@ func GetCanvasCatalog(c *gin.Context) {
 		return
 	}
 
+	// 批量取 models 表说明;查询失败按 fail-open 处理(回退目录存量文字),
+	// 不让一次 meta 查询故障弄垮整份目录 —— 与分组可见性的 fail-open 同原则。
+	remoteIDs := make([]string, 0, len(rows))
+	for i := range rows {
+		remoteIDs = append(remoteIDs, rows[i].RemoteID)
+	}
+	metaDescriptions, err := model.GetModelMetaDescriptionMap(remoteIDs)
+	if err != nil {
+		common.SysError(fmt.Sprintf("读取模型说明失败,目录说明回退存量文字: %v", err))
+		metaDescriptions = map[string]string{}
+	}
+
 	baseURL := os.Getenv("RELAY_BASE_URL")
 	if baseURL == "" {
 		baseURL = "https://your-relay.com"
@@ -261,7 +277,7 @@ func GetCanvasCatalog(c *gin.Context) {
 
 	models := make([]canvasCatalogWireModel, 0, len(rows))
 	for i := range rows {
-		models = append(models, toWireModel(&rows[i], groupModels, effectiveGroup))
+		models = append(models, toWireModel(&rows[i], groupModels, effectiveGroup, metaDescriptions))
 	}
 
 	response := gin.H{

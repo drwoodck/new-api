@@ -146,3 +146,26 @@ func IsCanvasCatalogRemoteIDDuplicated(id int, remoteID string) (bool, error) {
 	err := DB.Model(&CanvasCatalogModel{}).Where("remote_id = ? AND id <> ?", remoteID, id).Count(&cnt).Error
 	return cnt > 0, err
 }
+
+// GetModelMetaDescriptionMap 按模型名批量取 models 表的说明(说明统一真源,
+// 2026-09-04 spec 3.7)。只做精确名匹配:画布目录的 remote_id 就是计费用的
+// 字面模型名(controller/canvas_catalog.go 已断言),不走 models.name_rule 的
+// 前缀/包含规则 —— 目录条目与模型行是一对一的,模糊匹配反而会串行。
+// 空说明不入 map,调用方据此回退目录存量文字。
+func GetModelMetaDescriptionMap(modelNames []string) (map[string]string, error) {
+	out := make(map[string]string, len(modelNames))
+	if len(modelNames) == 0 {
+		return out, nil
+	}
+	var rows []Model
+	if err := DB.Select("model_name", "description").
+		Where("model_name IN ?", modelNames).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		if r.Description != "" {
+			out[r.ModelName] = r.Description
+		}
+	}
+	return out, nil
+}
