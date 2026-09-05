@@ -137,6 +137,22 @@ func TestAddQuotaSaturating(t *testing.T) {
 	assert.Equal(t, MaxQuota, AddQuotaSaturating(MaxQuota, MaxQuota))
 }
 
+// TestAddQuotaSaturatingChecked verifies the Checked variant reports the
+// saturation as a clamp descriptor, aligned with the other *Checked helpers.
+func TestAddQuotaSaturatingChecked(t *testing.T) {
+	quota, clamp := AddQuotaSaturatingChecked(10, 20)
+	assert.Equal(t, 30, quota)
+	assert.Nil(t, clamp)
+
+	quota, clamp = AddQuotaSaturatingChecked(MaxQuota, 1)
+	assert.Equal(t, MaxQuota, quota)
+	if assert.NotNil(t, clamp) {
+		assert.Equal(t, "AddQuotaSaturating", clamp.Op)
+		assert.Equal(t, QuotaClampOverflow, clamp.Kind)
+		assert.Equal(t, MaxQuota, clamp.Clamped)
+	}
+}
+
 func TestWalletQuotaFromDecimalStrict(t *testing.T) {
 	quota, err := WalletQuotaFromDecimalStrict(decimal.NewFromInt(4_294_500_000))
 	require.NoError(t, err)

@@ -57,6 +57,19 @@ func DetectInputMaterials(req TaskSubmitReq) []types.ResolvedInputMaterial {
 					if url := extractMaterialRef(itemMap["audio_url"]); url != "" {
 						add(types.MaterialTypeAudio, url)
 					}
+					// 豆包 content 形态也接受 {"type":"video_url","url":...}
+					// （与 hasVideoInMetadata 的判定对齐）：type 字段声明了素材
+					// 类型而地址放在通用 url 键上。同类型同 URL 由 add 去重。
+					switch itemMap["type"] {
+					case "video_url":
+						if url := extractMaterialRef(itemMap["url"]); url != "" {
+							add(types.MaterialTypeVideo, url)
+						}
+					case "audio_url":
+						if url := extractMaterialRef(itemMap["url"]); url != "" {
+							add(types.MaterialTypeAudio, url)
+						}
+					}
 				}
 			}
 		}

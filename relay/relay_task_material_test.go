@@ -3,10 +3,15 @@ package relay
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -26,6 +31,7 @@ func newMaterialBillingContext(req relaycommon.TaskSubmitReq) *gin.Context {
 
 // submitExplicitSeconds 复刻 RelayTaskSubmit 步骤 5.7 的实参闭包：只有视频
 // 素材采信请求级显式时长提示，音频恒 0（走探测/估算）。
+// 注意：与 relay_task.go 步骤 5.7 内联闭包保持一致，改动需两处同步。
 func submitExplicitSeconds(c *gin.Context) func(hosttypes.ResolvedInputMaterial) int {
 	return func(material hosttypes.ResolvedInputMaterial) int {
 		if material.MaterialType != hosttypes.MaterialTypeVideo {
@@ -123,4 +129,42 @@ func TestApplyMaterialBillingNotesQuotaClamp(t *testing.T) {
 	assert.Equal(t, common.MaxQuota, materialQuota)
 	require.NotNil(t, info.QuotaClamp)
 	assert.Equal(t, common.QuotaClampOverflow, info.QuotaClamp.Kind)
+}
+
+// TestRelayTaskSubmitRejectsSaturatedQuotaOnFreeModel 钉住提交链路的饱和守卫：
+// 免费模型（GroupRatio=0 且关闭免费模型预扣 → FreeModel=true）跳过
+// PreConsumeBilling 时无人检查 QuotaClamp，饱和的素材费/计费额度会经结算
+// 无余额检查实扣——提交必须以 quota_saturated 400 拒绝，FreeModel 不例外。
+func TestRelayTaskSubmitRejectsSaturatedQuotaOnFreeModel(t *testing.T) {
+	prev := operation_setting.GetQuotaSetting().EnableFreeModelPreConsume
+	operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = false
+	t.Cleanup(func() { operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = prev })
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":0}`))
+	t.Cleanup(func() { _ = ratio_setting.UpdateGroupRatioByJSONString(`{}`) })
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations",
+		strings.NewReader(`{"prompt":"dance","metadata":{"video_url":"https://example.invalid/in.mp4"}}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("channel_type", constant.ChannelTypeDoubaoVideo)
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "material-guard-model",
+		UsingGroup:      "default",
+		UserSetting:     kitdto.UserSetting{AcceptUnsetRatioModel: true},
+		// Action 经内嵌 *TaskRelayInfo 提升,必须显式初始化
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{},
+	}
+	info.QuotaClamp = &common.QuotaClamp{Op: "QuotaFromFloat", Kind: common.QuotaClampOverflow, Clamped: common.MaxQuota}
+
+	result, taskErr := RelayTaskSubmit(c, info)
+
+	// 场景前置确认:该请求确实被判定为免费模型(即走了跳过预扣的分支)
+	assert.True(t, info.PriceData.FreeModel, "场景前置:必须命中 FreeModel 分支")
+	assert.Nil(t, info.Billing, "FreeModel 分支不得建立计费会话")
+	require.Nil(t, result)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+	assert.Equal(t, "quota_saturated", taskErr.Code)
 }

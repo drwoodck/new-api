@@ -238,7 +238,12 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		noteTaskQuotaClamp(info, clamp)
 	}
 
-	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
+	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）。
+	//    饱和守卫必须位于 FreeModel 判定之外：免费模型跳过 PreConsumeBilling
+	//    时无人检查 QuotaClamp，饱和额度会经结算无余额检查实扣，一律拒绝。
+	if info.QuotaClamp != nil {
+		return nil, service.TaskErrorWrapperLocal(fmt.Errorf("素材费或计费额度饱和,已拒绝该请求"), "quota_saturated", http.StatusBadRequest)
+	}
 	if info.Billing == nil && !info.PriceData.FreeModel {
 		info.ForcePreConsume = true
 		if apiErr := service.PreConsumeBilling(c, common.AddQuotaSaturating(info.PriceData.Quota, info.PriceData.MaterialQuota), info); apiErr != nil {
@@ -281,11 +286,13 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	//    注入的倍率会把固定价放大且没有结算纠偏）。
 	finalQuota := info.PriceData.Quota
 	if tierRequestBilling {
+		totalQuota, clamp := common.AddQuotaSaturatingChecked(finalQuota, info.PriceData.MaterialQuota)
+		noteTaskQuotaClamp(info, clamp)
 		return &TaskSubmitResult{
 			UpstreamTaskID: upstreamTaskID,
 			TaskData:       taskData,
 			Platform:       platform,
-			Quota:          common.AddQuotaSaturating(finalQuota, info.PriceData.MaterialQuota),
+			Quota:          totalQuota,
 		}, nil
 	}
 	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
@@ -312,11 +319,13 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	}
 
+	totalQuota, clamp := common.AddQuotaSaturatingChecked(finalQuota, info.PriceData.MaterialQuota)
+	noteTaskQuotaClamp(info, clamp)
 	return &TaskSubmitResult{
 		UpstreamTaskID: upstreamTaskID,
 		TaskData:       taskData,
 		Platform:       platform,
-		Quota:          common.AddQuotaSaturating(finalQuota, info.PriceData.MaterialQuota),
+		Quota:          totalQuota,
 	}, nil
 }
 

@@ -171,11 +171,20 @@ func QuotaFromDecimalStrict(d decimal.Decimal) (int, error) {
 // 防止两项各自合法的额度相加越过 int32 边界（单请求饱和边界，与既有
 // QuotaFromFloatChecked 一致）。
 func AddQuotaSaturating(a, b int) int {
+	quota, _ := AddQuotaSaturatingChecked(a, b)
+	return quota
+}
+
+// AddQuotaSaturatingChecked is AddQuotaSaturating but also returns a non-nil
+// *QuotaClamp when the sum saturated, so billing callers can audit it.
+func AddQuotaSaturatingChecked(a, b int) (int, *QuotaClamp) {
 	sum := a + b
 	if sum > MaxQuota || (b > 0 && sum < a) {
-		return MaxQuota
+		clamp := &QuotaClamp{Op: "AddQuotaSaturating", Kind: QuotaClampOverflow, Original: float64(a) + float64(b), Clamped: MaxQuota}
+		SysError(clamp.Error())
+		return MaxQuota, clamp
 	}
-	return sum
+	return sum, nil
 }
 
 // WalletQuotaFromDecimalStrict converts wallet and top-up values within the

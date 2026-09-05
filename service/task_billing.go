@@ -15,6 +15,28 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// materialLogURLLimit 是持久化与日志里 data: URI 的保留长度。
+const materialLogURLLimit = 128
+
+// SanitizeMaterialsForLog 返回用于 BillingContext 快照与消费日志的素材副本：
+// data: URI 截断为前 128 字符并附注原始长度，避免 base64 内联数据撑爆私有
+// 快照与日志；http(s) URL 原样保留。计费不受影响——data URI 的时长已在提交
+// 链路解析完毕，结算修正（RefreshMaterialDurationsAtSettle）也只消费
+// http(s) URL。不修改入参。
+func SanitizeMaterialsForLog(materials []types.ResolvedInputMaterial) []types.ResolvedInputMaterial {
+	if materials == nil {
+		return nil
+	}
+	out := make([]types.ResolvedInputMaterial, len(materials))
+	for i, m := range materials {
+		out[i] = m
+		if len(m.URL) > materialLogURLLimit && strings.HasPrefix(m.URL, "data:") {
+			out[i].URL = m.URL[:materialLogURLLimit] + fmt.Sprintf("...(%d chars)", len(m.URL))
+		}
+	}
+	return out
+}
+
 // LogTaskConsumption 记录任务消费日志和统计信息（仅记录，不涉及实际扣费）。
 // 实际扣费已由 BillingSession（PreConsumeBilling + SettleBilling）完成。
 func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
@@ -44,7 +66,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	other["request_path"] = c.Request.URL.Path
 	other["model_price"] = info.PriceData.ModelPrice
 	if len(info.PriceData.Materials) > 0 {
-		other["input_materials"] = info.PriceData.Materials
+		other["input_materials"] = SanitizeMaterialsForLog(info.PriceData.Materials)
 		other["material_quota"] = info.PriceData.MaterialQuota
 	}
 	if info.PriceData.ModelRatio > 0 {
@@ -59,18 +81,21 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		other["upstream_model_name"] = info.UpstreamModelName
 	}
 	attachQuotaSaturation(c, info, other)
+	// 日志与用量统计口径必须与实扣一致：task.Quota / SettleBilling 均为
+	// 生成费+素材费，这里若只记生成费，用户与渠道用量会少计素材费。
+	totalQuota := common.AddQuotaSaturating(info.PriceData.Quota, info.PriceData.MaterialQuota)
 	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
 		ChannelId: info.ChannelId,
 		ModelName: info.OriginModelName,
 		TokenName: tokenName,
-		Quota:     info.PriceData.Quota,
+		Quota:     totalQuota,
 		Content:   logContent,
 		TokenId:   info.TokenId,
 		Group:     info.UsingGroup,
 		Other:     other,
 	})
-	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
-	model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
+	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, totalQuota)
+	model.UpdateChannelUsedQuota(info.ChannelId, totalQuota)
 }
 
 // ---------------------------------------------------------------------------
