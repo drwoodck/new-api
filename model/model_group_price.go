@@ -19,6 +19,8 @@ import (
 // 三个价格字段都用指针,理由与 CanvasCatalogModel.Enabled 相同(见该文件注释):
 // GORM 把数值零值当"未设置",0(免费)会写不进去,而 nil/0 语义完全不同 ——
 // nil = 该维度未配置(分别定价模式下即"这个分组不可用"),0 = 该分组免费。
+// 例外:VideoSecondPrice 的值 ≤0(含 0)一律视为未启用,不表达"按秒免费",
+// 与全局 GetVideoSecondPrice 同口径(见 ResolveVideoSecondPriceForGroup)。
 //
 // 只覆盖三个主维度:ModelRatio/CompletionRatio(按 token 计费用)、
 // ModelPrice(按次/按量计费用)。cache_ratio/image_ratio/audio_ratio 等继续
@@ -40,7 +42,7 @@ type ModelGroupPrice struct {
 	// VideoSecondPrice 该分组独立的按秒单价(美元/秒)。指针语义与 ModelPrice
 	// 一致:nil = 未配置(分别定价模式下该分组不启用按秒计费,不回退全局秒价,
 	// 见 ResolveVideoSecondPriceForGroup);非 nil 即最终价,不再叠乘 GroupRatio
-	// (0 = 该分组按秒免费,显式配置而非未配置)。
+	// (值 ≤0 视为未启用,与全局 GetVideoSecondPrice 同口径;nil 同为未启用)。
 	VideoSecondPrice *float64 `json:"video_second_price,omitempty"`
 	// InputMaterialPrices 该分组的输入素材价表。nil = 未配置(分别定价模式下
 	// 该分组不做素材计费,不回退全局表)。

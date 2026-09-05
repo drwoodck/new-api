@@ -33,6 +33,17 @@ func TestNormalizeInputMaterialPriceList(t *testing.T) {
 			},
 		},
 		{
+			name: "不适用计价字段清零_规范形",
+			in: InputMaterialPriceList{
+				{MaterialType: "image", PricePerUnit: 0.01, PricePerSecond: 0.5},
+				{MaterialType: "audio", PricePerSecond: 0.005, PricePerUnit: 2},
+			},
+			want: InputMaterialPriceList{
+				{MaterialType: "image", PricePerUnit: 0.01},
+				{MaterialType: "audio", PricePerSecond: 0.005},
+			},
+		},
+		{
 			name:    "material_type非法",
 			in:      InputMaterialPriceList{{MaterialType: "doc", PricePerUnit: 0.1}},
 			wantErr: true,

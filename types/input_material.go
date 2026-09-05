@@ -69,6 +69,9 @@ func (l *InputMaterialPriceList) Scan(value interface{}) error {
 //   - DefaultSeconds ∈ [0, maxDurationSeconds],超界拒绝由调用方钳制语义决定:
 //     这里对 >maxDurationSeconds 的值钳到 maxDurationSeconds(与解析侧
 //     "钳制后使用"同向),负值拒绝
+//   - 不适用的计价字段清零(image 条目的 PricePerSecond、音视频条目的
+//     PricePerUnit),固化规范形:落库与计费只认该类型的计价字段,另一字段
+//     残留值不产生歧义
 //
 // 返回全新切片,不修改入参。
 func NormalizeInputMaterialPriceList(list InputMaterialPriceList, maxDurationSeconds int) (InputMaterialPriceList, error) {
@@ -101,6 +104,12 @@ func NormalizeInputMaterialPriceList(list InputMaterialPriceList, maxDurationSec
 		}
 		if p.DefaultSeconds > maxDurationSeconds {
 			p.DefaultSeconds = maxDurationSeconds
+		}
+		// 固化规范形:清掉该类型不适用的计价字段(p 是 range 拷贝,不动入参)。
+		if p.MaterialType == MaterialTypeImage {
+			p.PricePerSecond = 0
+		} else {
+			p.PricePerUnit = 0
 		}
 		normalized = append(normalized, p)
 	}

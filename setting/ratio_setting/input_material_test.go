@@ -9,6 +9,15 @@ import (
 	"github.com/QuantumNous/new-api/types"
 )
 
+// TestInputMaterialPricesDefaultIsEmpty guards the upgrade-safety invariant,
+// mirroring TestVideoSecondPriceDefaultIsEmpty: material billing must be
+// opt-in; a non-empty default would silently change existing models' bills
+// without admin consent.
+func TestInputMaterialPricesDefaultIsEmpty(t *testing.T) {
+	require.Empty(t, defaultInputMaterialPrices,
+		"material billing must be opt-in; a non-empty default changes existing billing on upgrade")
+}
+
 func TestUpdateInputMaterialPricesByJSONString(t *testing.T) {
 	err := UpdateInputMaterialPricesByJSONString(`{"sora-2":[{"material_type":"video","price_per_second":0.1,"default_seconds":20}]}`)
 	require.NoError(t, err)
