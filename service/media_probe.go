@@ -74,14 +74,22 @@ func blockPrivateDialControl(_ string, address string, _ syscall.RawConn) error 
 		ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
 		return errMediaProbePrivateAddr
 	}
+	// 100.64.0.0/10 CGNAT(运营商级 NAT)常被误当公网,一并拒绝
+	if ip.Is4() {
+		b := ip.As4()
+		if b[0] == 100 && b[1] >= 64 && b[1] < 128 {
+			return errMediaProbePrivateAddr
+		}
+	}
 	return nil
 }
 
 // ProbeMediaDuration 通过头/尾各 256KB 的 Range 请求探测 URL 媒体时长(秒)。
 // 解析顺序:先头段(wav/mp3/mp4/webm),头段解不出再补尾段(mp4 moov/webm
 // 在尾)。SSRF 护栏:scheme 仅 http/https;Dialer Control 拒私网/环回/链路
-// 本地/未指定地址;重定向 ≤3;io.LimitReader 与 Range 双保险;总超时 = budget;
-// 并发信号量 8。
+// 本地/CGNAT/未指定地址;重定向 ≤3;io.LimitReader 与 Range 双保险;总超时
+// = budget;并发信号量 8(阻塞获取;信号量忙时愿意放弃的调用方——如后台
+// 补探测——应自行 try-acquire 后调 probeMediaDuration)。
 //
 // 全部失败路径返回 (0, false) 而非 error:探测失败 = 走系统默认估算的正常
 // 路径,不是异常。成功结果写入 1h TTL 缓存,供同 URL 提交与结算修正复用。
@@ -100,6 +108,13 @@ func ProbeMediaDuration(url string, budget time.Duration) (float64, bool) {
 	mediaProbeSem <- struct{}{}
 	defer func() { <-mediaProbeSem }()
 
+	return probeMediaDuration(url, budget)
+}
+
+// probeMediaDuration 是持锁后的探测主体:预算上下文、Range 抓取与各格式
+// 解析。调用方必须已持有 mediaProbeSem(前台 ProbeMediaDuration 阻塞获取,
+// 后台补探测 try-acquire)。
+func probeMediaDuration(url string, budget time.Duration) (float64, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	// Proxy 显式置 nil:连接目标必须是 URL 本身的主机,Control 才能拦到真实
@@ -283,7 +298,14 @@ func parseWavDuration(head []byte) (float64, bool) {
 		if haveFmt && haveData {
 			break
 		}
-		pos += 8 + int(size) + int(size&1) // RIFF chunk 按 2 字节对齐
+		// RIFF chunk 按 2 字节对齐;推进用 int64 计算并在 size 越界(超过剩余
+		// 长度)时停止——32 位平台上 int(uint32) 会回绕成负数,直接推进会造成
+		// 负下标/死循环。
+		next := int64(pos) + 8 + int64(size) + int64(size&1)
+		if next > int64(len(head)) {
+			break
+		}
+		pos = int(next)
 	}
 	if !haveFmt || !haveData {
 		return 0, false
@@ -391,6 +413,7 @@ func mp3FrameDuration(data []byte, pos int) (float64, bool) {
 }
 
 var (
+	webmEBMLMagic       = []byte{0x1A, 0x45, 0xDF, 0xA3}
 	webmDurationID      = []byte{0x44, 0x89}
 	webmTimecodeScaleID = []byte{0x2A, 0xD7, 0xB1}
 )
@@ -399,6 +422,11 @@ var (
 // 为 TimecodeScale 刻度)× TimecodeScale(默认 1e6 ns)。Duration 可能在头段
 // (小文件)或尾段(muxer 常在收尾时写入 Info/Cues),两段都扫。
 func parseWebmDuration(head, tail []byte) (float64, bool) {
+	// EBML 头恒为 Matroska 文件的首元素:头段不以 EBML magic 开头就不是
+	// webm,不进 ID 扫描(2/3 字节 ID 在任意非媒体数据里都会随机命中)。
+	if !bytes.HasPrefix(head, webmEBMLMagic) {
+		return 0, false
+	}
 	scale := 1e6
 	if s, ok := webmUint(head, webmTimecodeScaleID); ok {
 		scale = float64(s)

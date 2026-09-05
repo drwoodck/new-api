@@ -151,7 +151,15 @@ func resolveMaterialSeconds(m types.ResolvedInputMaterial, p types.InputMaterial
 	if isHTTPURL(m.URL) {
 		url := m.URL
 		go func() {
-			if d, ok := ProbeMediaDuration(url, materialReprobeBudget); ok {
+			// 机会主义 try-acquire:信号量忙(8 槽被前台短探测等占用)时直接
+			// 放弃,不排队——下次同 URL 提交还会再触发,零损失。
+			select {
+			case mediaProbeSem <- struct{}{}:
+			default:
+				return
+			}
+			defer func() { <-mediaProbeSem }()
+			if d, ok := probeMediaDuration(url, materialReprobeBudget); ok {
 				urlHash := sha256.Sum256([]byte(url))
 				logger.LogInfo(context.Background(), fmt.Sprintf("素材时长后台补探测成功 url_hash=%x seconds=%.0f", urlHash[:8], d))
 			}

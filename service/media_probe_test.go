@@ -51,7 +51,9 @@ func buildMinimalMp4(timescale, durationUnits uint32) []byte {
 	mvhdPayload = append(mvhdPayload, make([]byte, 24)...)               // pre_defined[6]
 	mvhdPayload = binary.BigEndian.AppendUint32(mvhdPayload, 3)          // next_track_ID
 	mvhd := append([]byte("mvhd"), mvhdPayload...)                       // full box:type + 100B payload
-	moov := append(u32be(len(mvhd)+4), mvhd...)
+	mvhdBox := append(u32be(len(mvhd)+4), mvhd...)                       // size + 'mvhd' box
+	moovPayload := append([]byte("moov"), mvhdBox...)                    // 'moov' 包裹 mvhd box
+	moov := append(u32be(len(moovPayload)+4), moovPayload...)            // size + 'moov' box
 	ftyp := append(u32be(20), []byte("ftypisom\x00\x00\x02\x00isomiso2")...)
 	return append(ftyp, moov...)
 }
@@ -200,19 +202,49 @@ func TestProbeParseMp3XingDuration(t *testing.T) {
 }
 
 // TestProbeParseWebmDuration 钉住 webm EBML 路径:Duration=7000 刻度 ×
-// TimecodeScale 1e6ns = 7s;Duration 在尾段时同样可解。
+// TimecodeScale 1e6ns = 7s;Duration 在尾段时同样可解;头段无 EBML magic 的
+// 非媒体数据一律不按 webm 处理(哪怕尾段含合法元素)。
 func TestProbeParseWebmDuration(t *testing.T) {
 	fixture := buildMinimalWebm(7000)
 	d, ok := parseWebmDuration(fixture, nil)
 	require.True(t, ok)
 	assert.InDelta(t, 7.0, d, 0.01)
 
-	d, ok = parseWebmDuration(nil, fixture)
+	// Duration 元素落在尾段(Info 被 muxer 后置):头段只留 EBML 头前缀
+	split := 20
+	require.Greater(t, len(fixture), split+8)
+	d, ok = parseWebmDuration(fixture[:split], fixture[split:])
 	require.True(t, ok)
 	assert.InDelta(t, 7.0, d, 0.01)
 
+	// EBML magic 缺失 → 不扫 ID,直接 false
+	_, ok = parseWebmDuration([]byte("plain text garbage"), fixture)
+	assert.False(t, ok)
+
 	_, ok = parseWebmDuration([]byte{0x1A, 0x45, 0xDF, 0xA3, 0x84, 0, 0, 0}, nil)
 	assert.False(t, ok)
+}
+
+// TestProbeDialControlBlocksSpecialRanges 直接钉住 connect 前地址校验:
+// 私网/环回/链路本地/未指定/CGNAT(100.64.0.0/10)/IPv4-mapped 与解析不出
+// IP 的主机名全拒,公网地址(含 CGNAT 区间边界外)放行。
+func TestProbeDialControlBlocksSpecialRanges(t *testing.T) {
+	blocked := []string{
+		"127.0.0.1:80", "10.1.2.3:443", "192.168.0.9:80", "172.31.255.1:443",
+		"169.254.10.10:80", "100.64.0.1:443", "100.127.255.254:8443",
+		"0.0.0.0:80", "[::1]:80", "[fe80::1]:443", "[::ffff:10.0.0.1]:443",
+		"localhost:80",
+	}
+	for _, addr := range blocked {
+		assert.Error(t, blockPrivateDialControl("tcp", addr, nil), "should block %s", addr)
+	}
+	allowed := []string{
+		"8.8.8.8:443", "100.63.255.255:443", "100.128.0.1:443",
+		"[2606:4700:4700::1111]:443",
+	}
+	for _, addr := range allowed {
+		assert.NoError(t, blockPrivateDialControl("tcp", addr, nil), "should allow %s", addr)
+	}
 }
 
 // TestParseWavDataSizeBeyondHead 钉住 wav 契约:data chunk 声明的 size 超出
