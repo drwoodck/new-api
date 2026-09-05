@@ -1387,6 +1387,9 @@ export function ModelMutateDrawer({
                               <p className='text-muted-foreground text-xs'>
                                 {t('素材价按类型独立配置,留空该类型不计费。')}
                               </p>
+                              <p className='text-muted-foreground text-xs'>
+                                {t('价格填 0 表示该类型显式免费，条目保留。')}
+                              </p>
                               {MATERIAL_KINDS.map((kind) => {
                                 const entry = row.inputMaterialPrices.find(
                                   (m) => m.material_type === kind.type
@@ -1544,6 +1547,9 @@ export function ModelMutateDrawer({
                         {t(
                           '填写「按次价格」将忽略该分组的倍率字段，与全局定价的固定价优先规则一致。留空整行表示该分组不可用该模型。'
                         )}
+                      </p>
+                      <p className='text-muted-foreground text-xs'>
+                        {t('秒价为 0 或留空时，该分组不启用按秒计费。')}
                       </p>
                     </div>
                   )}

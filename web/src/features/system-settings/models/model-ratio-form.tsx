@@ -386,6 +386,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
                               <Input
                                 type='number'
                                 min={0}
+                                max={3600}
                                 step={1}
                                 {...field}
                               />
@@ -411,6 +412,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
                               <Input
                                 type='number'
                                 min={0}
+                                max={3600}
                                 step={1}
                                 {...field}
                               />

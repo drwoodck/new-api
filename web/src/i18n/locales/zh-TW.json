@@ -5532,6 +5532,8 @@
     "Audio default seconds": "Audio default seconds",
     "Estimated seconds billed when a video material has no explicit or measurable duration. Per-model default_seconds overrides this.": "Estimated seconds billed when a video material has no explicit or measurable duration. Per-model default_seconds overrides this.",
     "Estimated seconds billed when an audio material has no explicit or measurable duration. Per-model default_seconds overrides this.": "Estimated seconds billed when an audio material has no explicit or measurable duration. Per-model default_seconds overrides this.",
-    "Enter a non-negative integer": "Enter a non-negative integer"
+    "秒价为 0 或留空时，该分组不启用按秒计费。": "A second price of 0 or blank disables per-second billing for the group.",
+    "价格填 0 表示该类型显式免费，条目保留。": "A price of 0 marks the type as explicitly free (the entry is kept).",
+    "Enter an integer between 0 and 3600": "Enter an integer between 0 and 3600"
   }
 }

@@ -5532,6 +5532,8 @@
     "Audio default seconds": "音频默认秒数",
     "Estimated seconds billed when a video material has no explicit or measurable duration. Per-model default_seconds overrides this.": "视频素材没有显式或可测时长时,按该秒数估算计费;模型级 default_seconds 优先于此值。",
     "Estimated seconds billed when an audio material has no explicit or measurable duration. Per-model default_seconds overrides this.": "音频素材没有显式或可测时长时,按该秒数估算计费;模型级 default_seconds 优先于此值。",
-    "Enter a non-negative integer": "请输入非负整数"
+    "秒价为 0 或留空时，该分组不启用按秒计费。": "秒价为 0 或留空时，该分组不启用按秒计费。",
+    "价格填 0 表示该类型显式免费，条目保留。": "价格填 0 表示该类型显式免费，条目保留。",
+    "Enter an integer between 0 and 3600": "请输入 0 到 3600 之间的整数"
   }
 }

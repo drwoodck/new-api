@@ -105,13 +105,15 @@ function createJsonStringField(
 }
 
 // 素材默认秒数以字符串形态进出表单(与相邻价格字段一致),提交时整体校验为
-// 非负整数字符串 —— 后端按 strconv.Atoi 解析,空串/小数会被静默忽略。
-const createNonNegativeIntegerField = (t: Translate) =>
+// [0, 3600] 的整数字符串 —— 后端按 strconv.Atoi 解析(空串/小数被静默忽略),
+// 上限对齐 types.MaxTaskDurationSeconds 的钳制,避免"存 5000 回显 3600"的漂移。
+const createMaterialDefaultSecondsField = (t: Translate) =>
   z.string().superRefine((value, ctx) => {
-    if (!/^\d+$/.test(value.trim())) {
+    const trimmed = value.trim()
+    if (!/^\d+$/.test(trimmed) || Number(trimmed) > 3600) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: t('Enter a non-negative integer'),
+        message: t('Enter an integer between 0 and 3600'),
       })
     }
   })
@@ -127,8 +129,8 @@ const createModelSchema = (t: Translate) =>
     VideoSecondPrice: createJsonStringField(t),
     VideoPriceTiers: createJsonStringField(t),
     InputMaterialPrices: createJsonStringField(t),
-    MaterialDefaultVideoSeconds: createNonNegativeIntegerField(t),
-    MaterialDefaultAudioSeconds: createNonNegativeIntegerField(t),
+    MaterialDefaultVideoSeconds: createMaterialDefaultSecondsField(t),
+    MaterialDefaultAudioSeconds: createMaterialDefaultSecondsField(t),
     AudioRatio: createJsonStringField(t),
     AudioCompletionRatio: createJsonStringField(t),
     ExposeRatioEnabled: z.boolean(),
