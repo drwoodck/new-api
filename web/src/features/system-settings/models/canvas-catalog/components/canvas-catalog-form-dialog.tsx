@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { Link } from '@tanstack/react-router'
 import { Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
@@ -66,7 +67,6 @@ type FormValues = {
   capabilities: string
   contract: string
   enabled: boolean
-  description: string
   pricing: string
   limitations: string
   param_schema: string
@@ -81,7 +81,6 @@ const EMPTY_VALUES: FormValues = {
   capabilities: '',
   contract: '',
   enabled: true,
-  description: '',
   pricing: '',
   limitations: '',
   param_schema: '',
@@ -373,19 +372,22 @@ export function CanvasCatalogFormDialog({
             )}
           />
 
-          <FormField
-            control={form.control}
-            name='description'
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t('说明')}</FormLabel>
-                <FormControl>
-                  <Textarea rows={2} {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+          <FormItem>
+            <FormLabel>{t('说明')}</FormLabel>
+            <div className='text-muted-foreground rounded-md border px-3 py-2 text-sm whitespace-pre-wrap'>
+              {currentModel?.description || t('暂无说明,可在模型管理页为该模型添加')}
+            </div>
+            <FormDescription>
+              {t('说明统一在「模型管理」页维护,目录侧只读;画布客户端与定价页均使用这份说明')}
+              <Link
+                to='/models/$section'
+                params={{ section: 'metadata' }}
+                className='text-primary ml-1 hover:underline'
+              >
+                {t('去模型管理页编辑')}
+              </Link>
+            </FormDescription>
+          </FormItem>
 
           <FormField
             control={form.control}
