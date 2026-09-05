@@ -37,8 +37,16 @@ type ModelGroupPrice struct {
 	CompletionRatio *float64             `json:"completion_ratio"`
 	ModelPrice      *float64             `json:"model_price"`
 	PriceTiers      *types.PriceTierList `json:"price_tiers,omitempty" gorm:"type:text"`
-	CreatedTime     int64                `json:"created_time" gorm:"bigint"`
-	UpdatedTime     int64                `json:"updated_time" gorm:"bigint"`
+	// VideoSecondPrice 该分组独立的按秒单价(美元/秒)。指针语义与 ModelPrice
+	// 一致:nil = 未配置(分别定价模式下该分组不启用按秒计费,不回退全局秒价,
+	// 见 ResolveVideoSecondPriceForGroup);非 nil 即最终价,不再叠乘 GroupRatio
+	// (0 = 该分组按秒免费,显式配置而非未配置)。
+	VideoSecondPrice *float64 `json:"video_second_price,omitempty"`
+	// InputMaterialPrices 该分组的输入素材价表。nil = 未配置(分别定价模式下
+	// 该分组不做素材计费,不回退全局表)。
+	InputMaterialPrices *types.InputMaterialPriceList `json:"input_material_prices,omitempty" gorm:"type:text"`
+	CreatedTime         int64                         `json:"created_time" gorm:"bigint"`
+	UpdatedTime         int64                         `json:"updated_time" gorm:"bigint"`
 }
 
 // GetModelGroupPrices 返回某模型的全部分组价格行,管理端编辑表单加载用。
@@ -88,15 +96,30 @@ func GetAllModelGroupPrices() (map[string]map[string]ModelGroupPrice, error) {
 // 任一行的档表非法即整体拒绝(不部分生效)。
 func ReplaceModelGroupPrices(modelName string, rows []ModelGroupPrice) error {
 	for i := range rows {
-		if rows[i].PriceTiers == nil {
-			continue
+		if rows[i].PriceTiers != nil {
+			normalized, err := types.NormalizePriceTierList(*rows[i].PriceTiers)
+			if err != nil {
+				return fmt.Errorf("分组 %s 档表: %w", rows[i].GroupName, err)
+			}
+			normalizedList := types.PriceTierList(normalized)
+			rows[i].PriceTiers = &normalizedList
 		}
-		normalized, err := types.NormalizePriceTierList(*rows[i].PriceTiers)
-		if err != nil {
-			return fmt.Errorf("分组 %s 档表: %w", rows[i].GroupName, err)
+		if rows[i].InputMaterialPrices != nil {
+			normalized, err := types.NormalizeInputMaterialPriceList(
+				*rows[i].InputMaterialPrices, types.MaxTaskDurationSeconds)
+			if err != nil {
+				return fmt.Errorf("分组 %s 素材价: %w", rows[i].GroupName, err)
+			}
+			normalizedList := types.InputMaterialPriceList(normalized)
+			rows[i].InputMaterialPrices = &normalizedList
 		}
-		normalizedList := types.PriceTierList(normalized)
-		rows[i].PriceTiers = &normalizedList
+		if rows[i].VideoSecondPrice != nil {
+			sp := *rows[i].VideoSecondPrice
+			if sp < 0 || sp > types.MaxTierPrice {
+				return fmt.Errorf("分组 %s 秒价超出合法区间 [0, %g]: %v",
+					rows[i].GroupName, types.MaxTierPrice, sp)
+			}
+		}
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("model_name = ?", modelName).Delete(&ModelGroupPrice{}).Error; err != nil {
@@ -262,15 +285,15 @@ const (
 
 // ResolvedTierPrice 是"某模型对某分组 × 请求档位"算出的档位价格。
 type ResolvedTierPrice struct {
-	Status      TierResolution
+	Status TierResolution
 	// TierType 档表维度（types.TierTypeResolution/Request/...）。
-	TierType    string
+	TierType string
 	// TierKey 命中的归一化档位键（request 空 key 档命中时为 ""）。
-	TierKey     string
-	Label       string
+	TierKey string
+	Label   string
 	// Price 档位原价（美元，未乘分组倍率）—— 调用方按 GroupRatioApplied 乘一次，
 	// 与既有 ModelPriceHelperPerCall 的"原价 × GroupRatio"口径保持一致，避免双重乘。
-	Price       float64
+	Price float64
 	// BillingUnit 命中的计价单位（types.BillingUnitSecond / BillingUnitRequest）。
 	BillingUnit string
 	// GroupRatioApplied 统一模式=GroupRatio[group]；分别定价模式恒 1。
@@ -402,4 +425,35 @@ func resolveTierFromTiers(tiers types.PriceTierList, groupRatio float64, tierInp
 		GroupRatioApplied: groupRatio,
 		TierSnapshot:      &snapshot,
 	}
+}
+
+// ResolveMaterialPricesForGroup 返回「模型 × 分组」生效的素材价表与是否配置。
+//   - 分别定价模式:只认行内表,nil 即未配置(false)——不回退全局,与档表
+//     "未覆盖即不可用"同一闸门语义。
+//   - 统一模式:全局 option 表,返回的是原价;计费侧统一乘 GroupRatioInfo
+//     (与统一模式固定价 × GroupRatio 同口径)。
+//
+// 计费热路径(ModelPriceHelperPerCall)已持有 row 时直接传入,避免重复查表。
+func ResolveMaterialPricesForGroup(modelName, groupName string, groupPricingEnabled bool, row *ModelGroupPrice) (types.InputMaterialPriceList, bool) {
+	if groupPricingEnabled {
+		if row == nil || row.InputMaterialPrices == nil || len(*row.InputMaterialPrices) == 0 {
+			return nil, false
+		}
+		return *row.InputMaterialPrices, true
+	}
+	return ratio_setting.GetInputMaterialPrices(modelName)
+}
+
+// ResolveVideoSecondPriceForGroup 返回「模型 × 分组」生效的按秒单价与是否启用。
+//   - 分别定价模式:只认行内列,nil 即不启用(false,不回退全局);
+//   - 统一模式:全局秒价,倍率由调用方按 GroupRatioInfo 叠乘(既有路径),
+//     本函数只回答"价格是多少、有没有"。
+func ResolveVideoSecondPriceForGroup(modelName, groupName string, groupPricingEnabled bool, row *ModelGroupPrice) (float64, bool) {
+	if groupPricingEnabled {
+		if row == nil || row.VideoSecondPrice == nil || *row.VideoSecondPrice <= 0 {
+			return 0, false
+		}
+		return *row.VideoSecondPrice, true
+	}
+	return ratio_setting.GetVideoSecondPrice(modelName)
 }

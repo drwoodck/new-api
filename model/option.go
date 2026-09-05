@@ -12,6 +12,8 @@ import (
 	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/QuantumNous/new-api/types"
+
 	"gorm.io/gorm"
 )
 
@@ -152,6 +154,9 @@ func InitOptionMap() {
 	common.OptionMap["ImageRatio"] = ratio_setting.ImageRatio2JSONString()
 	common.OptionMap["VideoSecondPrice"] = ratio_setting.VideoSecondPrice2JSONString()
 	common.OptionMap["VideoPriceTiers"] = ratio_setting.VideoPriceTiers2JSONString()
+	common.OptionMap["InputMaterialPrices"] = ratio_setting.InputMaterialPrices2JSONString()
+	common.OptionMap["MaterialDefaultVideoSeconds"] = strconv.Itoa(ratio_setting.MaterialDefaultVideoSeconds)
+	common.OptionMap["MaterialDefaultAudioSeconds"] = strconv.Itoa(ratio_setting.MaterialDefaultAudioSeconds)
 	common.OptionMap["AudioRatio"] = ratio_setting.AudioRatio2JSONString()
 	common.OptionMap["AudioCompletionRatio"] = ratio_setting.AudioCompletionRatio2JSONString()
 	common.OptionMap["TopUpLink"] = common.TopUpLink
@@ -581,6 +586,32 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateVideoSecondPriceByJSONString(value)
 	case "VideoPriceTiers":
 		err = ratio_setting.UpdateVideoPriceTiersByJSONString(value)
+	case "InputMaterialPrices":
+		err = ratio_setting.UpdateInputMaterialPricesByJSONString(value)
+	case "MaterialDefaultVideoSeconds":
+		var n int
+		n, err = strconv.Atoi(value)
+		if err == nil {
+			if n < 0 {
+				n = 0
+			}
+			if n > types.MaxTaskDurationSeconds {
+				n = types.MaxTaskDurationSeconds
+			}
+			ratio_setting.MaterialDefaultVideoSeconds = n
+		}
+	case "MaterialDefaultAudioSeconds":
+		var n int
+		n, err = strconv.Atoi(value)
+		if err == nil {
+			if n < 0 {
+				n = 0
+			}
+			if n > types.MaxTaskDurationSeconds {
+				n = types.MaxTaskDurationSeconds
+			}
+			ratio_setting.MaterialDefaultAudioSeconds = n
+		}
 	case "AudioRatio":
 		err = ratio_setting.UpdateAudioRatioByJSONString(value)
 	case "AudioCompletionRatio":

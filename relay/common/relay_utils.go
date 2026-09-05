@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -143,7 +144,10 @@ func validatePrompt(prompt string) *dto.TaskError {
 // MaxTaskDurationSeconds caps user-supplied video duration. Duration is used
 // as a billing multiplier (OtherRatio "seconds"); an unbounded value could
 // overflow quota calculation into a negative charge.
-const MaxTaskDurationSeconds = 3600
+//
+// MaxTaskDurationSeconds 真源在 types 包(ratio_setting 校验需要它且不能反向
+// import relay/common);此处别名再导出,既有引用不受影响。
+const MaxTaskDurationSeconds = hosttypes.MaxTaskDurationSeconds
 
 // defaultVideoDurationByChannel mirrors each video adaptor's own fallback so
 // per-second billing charges the same duration the upstream will actually
