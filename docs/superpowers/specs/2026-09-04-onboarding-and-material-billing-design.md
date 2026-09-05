@@ -107,7 +107,10 @@ type InputMaterialPriceList []InputMaterialPrice // Valuer/Scanner,存 text JSON
 - 计费真源唯一:模型定价页(全局 option)+ `model_group_price`;**目录只投影,不改计费逻辑**
 - 新增 `GeneratePricingSummary(model, group)`:复用 `resolveCanvasGroupPrice` 解析结果生成文案——分档表逐档列出、秒价 `X/秒`、按次 `X/次`、token 模型按用户端定价页同口径、未定价显式"未定价";含素材价时追加 `输入图 X/张 · 输入视频 X/秒 …`
 - 下发:`GetCanvasCatalog` 与 `catalog-overview` 中,`Pricing` 为空 → 自动生成;非空 → 视为手填覆盖;wire 新增 `pricing_source: auto|custom`,UI 显示徽标
+- **秒价下发口径修复(客户端审计发现)**:`video_second_price` 路径目前下发原始秒价+分组倍率分离字段,客户端(固定 ratio=1 且忽略该字段)会低估约 3×;改为与档表/按次同口径——**下发已乘分组倍率的终价**,老客户端被顺带修复
+- **wire 透传 vendor/tags**(供客户端预置匹配,见 3.9):条目附带 `models` 表 meta 的 vendor 名称与 tags(真源 `models` 表,与说明统一同方向)
 - 审核卡/目录行提供 deep-link,直达该模型的定价编辑 sheet
+- 已知边界:客户端当前不渲染 `pricing` 自由文本(结构化 group_price 才是用户可见价格),自动文案的主要价值在管理端与新客户端
 
 ### 3.4 巡检自动起草(需求 3 进料端)
 
@@ -155,6 +158,18 @@ type InputMaterialPriceList []InputMaterialPrice // Valuer/Scanner,存 text JSON
 - 前端 `CONTRACT_BY_CAPABILITY` 改为取自后端(新只读接口或复用现有配置下发),消除双源
 - 清理死代码:`canvas-catalog-table.tsx`、`useCanvasCatalogModels`
 
+### 3.9 画布客户端(myhuabua)审计结论与修复项
+
+2026-09-04 对客户端(独立仓库 `myhuabua`,Tauri + React)做了三链路审计:目录落地 **可用**、上下架 **半成品**、计费一致 **部分**。以下为客户端侧工作项(独立计划,不阻塞服务端各阶段):
+
+1. **预置供应商自动匹配(新需求)**:目录条目先与客户端已预置的全部供应商模型匹配——`remote_id`/模型名精确匹配 → 归一化匹配(去厂商前缀/大小写/分隔符)+ 服务端新增的 vendor/tags 辅助;命中 → 模型归属该预置供应商、参数 schema 以中转站下发的非空字段优先覆盖预置同名字段;全未命中 → 维持现状落到 `builtin-kungai` 按 `param_schema`/`schema_override` 建档
+2. **删除对账(高优)**:同步 payload 中缺失的 remote_id 增加墓碑清理(删本地 `relay-*` 模型与克隆 profile),替代现状"被删模型无限存活";缩量保护(0 或腰斩拒收)保留
+3. **同步后刷新**(高优):`catalog://synced` 后重载 `providersStore`,已打开画布立即可见新模型
+4. **commercial 构建参数表单**(高优核实):`endpoint_profile_list*` 命令被编译掉但 `useEndpointProfile` 仍调用 → profile=null、表单为空;核实并修复(放行命令或补 provisioning 路径)
+5. **秒价口径适配核验**:服务端改为下发终价后,客户端 `preflight.ts` 的 `group_ratio=1` 行为恰好正确;移除误导性注释,`group_ratio_applied` 字段消费决策(展示"已含分组倍率"或忽略)
+6. 低优:`pricing` 文本渲染(挂 3.3 自动文案)、`schema_vocab` 消费、`catalog_version` 语义修正
+7. 已核对无需改:软下线分类、ETag/304、合约上报、设备绑定、按次/档表预估
+
 ## 4. 实施阶段(可独立交付、独立验证)
 
 1. **修复层**:编辑覆盖 bug + 说明统一 + 表单三区简化 + 死代码清理(零计费风险,先行)
@@ -162,6 +177,7 @@ type InputMaterialPriceList []InputMaterialPrice // Valuer/Scanner,存 text JSON
 3. **固定价分组化**:秒价分组列接入解析/结算 + 前端编辑器
 4. **定价文案**:自动生成 + wire/pricing_source + 徽标 + deep-link
 5. **上新工作台**:巡检起草 + 聚合/开闸/忽略接口 + 工作台页面 + 模型管理页"全部起草" + 上游 `/api/pricing` 拉取预填(ratio_sync 服务化复用)
+6. **客户端修复(myhuabua 仓库,独立计划)**:3.9 所列 1–5 项,其中删除对账/同步刷新/commercial 表单为高优;与服务端阶段 4 的秒价口径修复配对验证
 
 ## 5. 测试策略
 
