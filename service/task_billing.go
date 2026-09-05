@@ -373,7 +373,10 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 
 	// 计算实际应扣费额度: totalTokens * modelRatio * groupRatio * otherMultiplier（饱和转换，防止溢出成负数）
 	actualQuota, clamp := common.QuotaFromFloatChecked(float64(totalTokens) * modelRatio * finalGroupRatio * otherMultiplier)
-	actualQuota = addFrozenMaterialQuota(task, actualQuota)
+	actualQuota, materialClamp := addFrozenMaterialQuota(task, actualQuota)
+	if materialClamp != nil && clamp == nil {
+		clamp = materialClamp
+	}
 
 	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f", totalTokens, modelRatio, finalGroupRatio, otherMultiplier)
 	RecalculateTaskQuota(ctx, task, actualQuota, reason, clamp)
@@ -397,7 +400,10 @@ func recalculateTaskQuotaByTokensFromBillingContext(ctx context.Context, task *m
 	}
 
 	actualQuota, clamp := common.QuotaFromFloatChecked(float64(totalTokens) * bc.ModelRatio * bc.GroupRatio * otherMultiplier)
-	actualQuota = addFrozenMaterialQuota(task, actualQuota)
+	actualQuota, materialClamp := addFrozenMaterialQuota(task, actualQuota)
+	if materialClamp != nil && clamp == nil {
+		clamp = materialClamp
+	}
 
 	reason := fmt.Sprintf("token重算(分组分别定价)：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f",
 		totalTokens, bc.ModelRatio, bc.GroupRatio, otherMultiplier)
@@ -406,9 +412,12 @@ func recalculateTaskQuotaByTokensFromBillingContext(ctx context.Context, task *m
 
 // addFrozenMaterialQuota 把提交时冻结的素材费加回 token 重算出的生成额度:
 // 素材费已随预扣入账,token 重算只重算生成费,不加回会把素材费整笔退掉。
-func addFrozenMaterialQuota(task *model.Task, generationQuota int) int {
+// 返回(并入后的额度, 素材侧钳制)——钳制由调用方按"生成侧优先"并入传给
+// RecalculateTaskQuota 的 clamp,饱和事件落 task billing log 的
+// admin_info.quota_saturation 审计。
+func addFrozenMaterialQuota(task *model.Task, generationQuota int) (int, *common.QuotaClamp) {
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.MaterialQuota != 0 {
-		return common.AddQuotaSaturating(generationQuota, bc.MaterialQuota)
+		return common.AddQuotaSaturatingChecked(generationQuota, bc.MaterialQuota)
 	}
-	return generationQuota
+	return generationQuota, nil
 }

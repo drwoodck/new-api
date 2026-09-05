@@ -154,3 +154,43 @@ func TestSettleTaskBillingTokenRecalcKeepsMaterialQuota(t *testing.T) {
 	expected := common.QuotaFromFloat(1000*2*1*1) + materialQuota
 	require.Equal(t, expected, task.Quota)
 }
+
+// TestSettleTaskBillingTokenRecalcSaturatesMaterialQuota 钉住饱和审计:素材费
+// 与生成费相加溢出时,终值饱和到 MaxQuota 而非回绕,且钳制事件经
+// RecalculateTaskQuota 落进 task billing log 的 admin_info.quota_saturation。
+func TestSettleTaskBillingTokenRecalcSaturatesMaterialQuota(t *testing.T) {
+	truncate(t)
+	seedUser(t, 1, 10_000_000)
+	seedToken(t, 1, 1, "sk-material-saturate", 10_000_000)
+	seedChannel(t, 1)
+
+	const modelName = "test-material-saturate-model"
+	ratiosBefore := ratio_setting.ModelRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(ratiosBefore))
+	})
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"`+modelName+`":2}`))
+
+	task := makeTask(1, 1, 5100, 1, BillingSourceWallet, 0)
+	bc := task.PrivateData.BillingContext
+	bc.OriginModelName = modelName
+	bc.SecondPrice = 0
+	bc.MaterialQuota = common.MaxQuota
+	task.Properties.OriginModelName = modelName
+
+	settleTaskBillingOnComplete(context.Background(), &mockAdaptor{}, task,
+		&relaycommon.TaskInfo{Status: model.TaskStatusSuccess, TotalTokens: 1000})
+
+	// 生成 20000 + 素材 MaxQuota 溢出 → 饱和到 MaxQuota
+	require.Equal(t, common.MaxQuota, task.Quota)
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	var other map[string]interface{}
+	require.NoError(t, common.Unmarshal([]byte(log.Other), &other))
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok, "admin_info missing in log other: %v", other)
+	saturation, ok := adminInfo["quota_saturation"].(map[string]interface{})
+	require.True(t, ok, "quota_saturation missing in admin_info: %v", adminInfo)
+	assert.Equal(t, "AddQuotaSaturating", saturation["op"])
+}

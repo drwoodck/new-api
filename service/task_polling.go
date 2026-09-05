@@ -829,5 +829,9 @@ func addMaterialQuotaAtSettle(ctx context.Context, task *model.Task, bc *model.T
 		corrected = true
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 素材费结算修正:%d → %d", task.TaskID, before, recomputed))
 	}
-	return common.AddQuotaSaturating(generationQuota, materialQuota), clamp, corrected
+	finalQuota, addClamp := common.AddQuotaSaturatingChecked(generationQuota, materialQuota)
+	if addClamp != nil && clamp == nil {
+		clamp = addClamp
+	}
+	return finalQuota, clamp, corrected
 }
