@@ -289,7 +289,18 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 
 	// 视频按秒计费的模型只需配置每秒单价，不应再要求额外的按次价格/倍率。
 	// 真正的额度计算（单价 × 时长）在 RelayTaskSubmit 的按秒计费步骤完成。
-	if secondPrice, ok := ratio_setting.GetVideoSecondPrice(info.OriginModelName); ok {
+	//
+	// 分别定价模式只认行内 VideoSecondPrice 列(nil/≤0 = 该分组不启用按秒计费,
+	// 不回退全局);统一模式维持全局秒价(ResolveVideoSecondPriceForGroup 内部
+	// 完成),倍率已含在 groupRatioInfo。行内秒价是最终价,置 1 后按既有公式
+	// 计算额度,与分别定价固定价同约定。
+	if secondPrice, ok := model.ResolveVideoSecondPriceForGroup(
+		info.OriginModelName, info.UsingGroup, groupPricingEnabled, groupPriceRow); ok {
+		if groupPricingEnabled {
+			groupRatioInfo.GroupRatio = 1
+			groupRatioInfo.HasSpecialRatio = false
+			groupRatioInfo.GroupSpecialRatio = -1
+		}
 		return buildVideoSecondPriceData(secondPrice, groupRatioInfo)
 	}
 

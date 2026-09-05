@@ -165,10 +165,12 @@ func TestGetCanvasCatalogNoGroupContextGroupPriceIsNil(t *testing.T) {
 	assert.True(t, resp.Models[0].GroupVisible, "无分组信息时按可见处理(同一 fail-open 原则)")
 }
 
-// TestGetCanvasCatalogVideoSecondPriceWinsOverGroupPricingInDispatch 锁住
-// "按秒计费优先于分组分别定价"这条规则在目录下发路径上也生效,与计费路径
-// (ModelPriceHelperPerCall)保持一致的优先级。
-func TestGetCanvasCatalogVideoSecondPriceWinsOverGroupPricingInDispatch(t *testing.T) {
+// TestGetCanvasCatalogSeparateModeRowScalarOverGlobalSecondPrice 锁住分别定价
+// 模式下行内无秒价列时目录不再下发全局秒价 —— 与计费路径(ModelPriceHelperPerCall)
+// 同一规则:行是唯一价格权威,按行内标量 999 下发,否则目录会宣传一个计费根本
+// 不收取的按秒价。(旧契约"全局秒价赢过分别定价"已由分组秒价行内列取代,
+// 见 relay/helper/video_group_second_price_test.go。)
+func TestGetCanvasCatalogSeparateModeRowScalarOverGlobalSecondPrice(t *testing.T) {
 	router := setupCatalogGroupPriceTestDB(t, "default")
 
 	m := &model.Model{ModelName: "video-conflict-catalog-model", Status: 1, GroupPricingEnabled: true}
@@ -191,8 +193,51 @@ func TestGetCanvasCatalogVideoSecondPriceWinsOverGroupPricingInDispatch(t *testi
 	require.Len(t, resp.Models, 1)
 	price := resp.Models[0].GroupPrice
 	require.NotNil(t, price)
+	require.Nil(t, price.VideoSecondPrice, "行内无秒价列不得下发全局秒价")
+	assert.Equal(t, 999.0, price.ModelPrice, "必须按行内标量固定价下发")
+	assert.Equal(t, 1, price.QuotaType)
+	assert.Equal(t, float64(1), price.GroupRatioApplied, "分别定价模式下不叠乘倍率")
+}
+
+// TestGetCanvasCatalogSeparateModeRowSecondPriceDispatched 分别定价模式的行内
+// 秒价按调用者分组下发:终价、不叠乘分组倍率(GroupRatioApplied=1),且优先于
+// 全局秒价 —— 与 ModelPriceHelperPerCall 的行内秒价分支同序同价。
+func TestGetCanvasCatalogSeparateModeRowSecondPriceDispatched(t *testing.T) {
+	router := setupCatalogGroupPriceTestDB(t, "vip")
+
+	m := &model.Model{ModelName: "gsp-catalog-model", Status: 1, GroupPricingEnabled: true}
+	require.NoError(t, m.Insert())
+	model.RefreshPricing()
+	require.NoError(t, model.ReplaceModelGroupPrices("gsp-catalog-model", []model.ModelGroupPrice{
+		{GroupName: "vip", VideoSecondPrice: float64Ptr(0.2)},
+		{GroupName: "default", VideoSecondPrice: float64Ptr(9.99)}, // 不得泄露
+	}))
+
+	// 全局秒价与全局倍率都设成显眼值:行内秒价是终价,两者都不该出现在结果里。
+	savedVideoPrice := ratio_setting.VideoSecondPrice2JSONString()
+	savedGroupRatio := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateVideoSecondPriceByJSONString(savedVideoPrice))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroupRatio))
+	})
+	require.NoError(t, ratio_setting.UpdateVideoSecondPriceByJSONString(`{"gsp-catalog-model":0.1}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"vip":10}`))
+
+	model.DB.Create(&model.CanvasCatalogModel{
+		RemoteID: "gsp-catalog-model", DisplayName: "Group Second", Capabilities: "video_gen",
+		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1,
+	})
+	model.DB.Create(&model.Ability{Group: "vip", Model: "gsp-catalog-model", ChannelId: 1, Enabled: true})
+
+	resp := fetchCanvasCatalog(t, router)
+	require.Len(t, resp.Models, 1)
+	price := resp.Models[0].GroupPrice
+	require.NotNil(t, price)
 	require.NotNil(t, price.VideoSecondPrice)
-	assert.Equal(t, 0.1, *price.VideoSecondPrice, "按秒计费必须赢,不能被分组分别定价的 999 盖过去")
+	assert.Equal(t, 0.2, *price.VideoSecondPrice, "必须下发调用者分组的行内秒价,不是全局 0.1 也不是其它分组的 9.99")
+	assert.Equal(t, 0.2, price.ModelPrice)
+	assert.Equal(t, 1, price.QuotaType)
+	assert.Equal(t, float64(1), price.GroupRatioApplied, "行内秒价是终价,GroupRatioApplied 恒 1")
 }
 
 // TestGetCanvasCatalogTierTableBeatsVideoSecondPrice 档表模型目录下发：

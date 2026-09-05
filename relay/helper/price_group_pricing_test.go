@@ -188,9 +188,12 @@ func TestModelPriceHelperPerCallGroupPricingUnconfiguredGroupReturnsError(t *tes
 	require.Error(t, err)
 }
 
-// TestModelPriceHelperPerCallVideoSecondPriceWinsOverGroupPricing 锁住"按秒计费
-// 优先于分组分别定价"这条既定规则:两者都配置时,按秒计费为准。
-func TestModelPriceHelperPerCallVideoSecondPriceWinsOverGroupPricing(t *testing.T) {
+// TestModelPriceHelperPerCallGroupPricingRowScalarOverGlobalSecondPrice 分别定价
+// 模式下行内没有秒价列时,全局秒价不生效 —— 行是唯一价格权威,按行内标量
+// (ModelPrice=999)计费,不得回退全局秒价 0.1。
+// (旧契约"全局秒价赢过分别定价"已由分组秒价行内列取代,见
+// video_group_second_price_test.go。)
+func TestModelPriceHelperPerCallGroupPricingRowScalarOverGlobalSecondPrice(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setupGroupPricingTestDB(t)
 	insertGroupPricedModel(t, "gp-video-conflict-model")
@@ -205,5 +208,7 @@ func TestModelPriceHelperPerCallVideoSecondPriceWinsOverGroupPricing(t *testing.
 	ctx, info := newRelayInfoForGroup("gp-video-conflict-model", "default", "default")
 	priceData, err := ModelPriceHelperPerCall(ctx, info)
 	require.NoError(t, err)
-	assert.Equal(t, 0.1, priceData.VideoSecondPrice, "按秒计费必须赢,不能被分组分别定价的 999 盖过去")
+	assert.Zero(t, priceData.VideoSecondPrice, "行内无秒价列不得回退全局秒价计费")
+	assert.Equal(t, 999.0, priceData.ModelPrice, "必须按行内标量固定价计费")
+	assert.True(t, priceData.UsePrice)
 }

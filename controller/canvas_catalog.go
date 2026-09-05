@@ -132,9 +132,39 @@ func resolveCanvasGroupPrice(remoteID, group string) *canvasGroupPrice {
 			GroupRatioApplied: tierTable.GroupRatioApplied,
 		}
 	}
-	// 视频按秒计费与分组分别定价互斥、按秒计费为准(ModelPriceHelperPerCall
-	// 的既有规则),这里同样优先处理:按秒计费的价格对所有分组都一样,
-	// 不经过 ResolveGroupPrice。
+	// 分别定价模式的行内秒价:行是唯一价格权威,与 ModelPriceHelperPerCall
+	// 的秒价分支同序 —— 行内 VideoSecondPrice(nil/≤0 视为未启用)是最终价,
+	// 不叠乘分组倍率(GroupRatioApplied=1);行内没有秒价列时也不回退全局秒价
+	// (计费侧同样不回退,直接落到行内标量),否则目录会下发一个计费根本
+	// 不会收取的按秒价。
+	if model.IsGroupPricingEnabled(remoteID) {
+		row, err := model.GetModelGroupPrice(remoteID, group)
+		if err != nil {
+			common.SysError(fmt.Sprintf("解析模型 %s 在分组 %s 下的分组价格行失败,本次目录不下发该条目的价格: %v", remoteID, group, err))
+			return nil
+		}
+		if secondPrice, ok := model.ResolveVideoSecondPriceForGroup(remoteID, group, true, row); ok {
+			return &canvasGroupPrice{
+				QuotaType:         1,
+				ModelPrice:        secondPrice,
+				VideoSecondPrice:  row.VideoSecondPrice,
+				GroupRatioApplied: 1,
+			}
+		}
+		resolved := model.ResolveGroupPriceFromRow(row)
+		if !resolved.Available {
+			return nil
+		}
+		return &canvasGroupPrice{
+			QuotaType:         resolved.QuotaType,
+			ModelPrice:        resolved.ModelPrice,
+			ModelRatio:        resolved.ModelRatio,
+			CompletionRatio:   resolved.CompletionRatio,
+			GroupRatioApplied: resolved.GroupRatioApplied,
+		}
+	}
+	// 统一模式的视频按秒计费:按秒计费的价格对所有分组都一样,不经过
+	// ResolveGroupPrice(倍率按分组叠乘,与计费侧 groupRatioInfo 同口径)。
 	if secondPrice, ok := ratio_setting.GetVideoSecondPrice(remoteID); ok {
 		groupRatio := ratio_setting.GetGroupRatio(group)
 		return &canvasGroupPrice{
