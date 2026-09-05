@@ -1,5 +1,7 @@
 package constant
 
+import "sort"
+
 // ContractForCapability 把画布目录条目的 capability 映射到画布客户端的契约模板 id。
 //
 // 画布侧总共只有两个契约(src-tauri/src/relay/contracts.rs 的 SUPPORTED_CONTRACTS:
@@ -35,4 +37,30 @@ func IsSupportedContract(contract string) bool {
 		}
 	}
 	return false
+}
+
+// SupportedContracts 返回画布客户端支持的契约清单(值集合的排序副本),
+// 供管理端表单下拉与 GET /api/canvas/admin/meta 下发。返回副本防止调用方
+// 改写内部映射。
+func SupportedContracts() []string {
+	out := make([]string, 0, len(capabilityToContract))
+	seen := make(map[string]struct{}, len(capabilityToContract))
+	for _, c := range capabilityToContract {
+		if _, dup := seen[c]; dup {
+			continue
+		}
+		seen[c] = struct{}{}
+		out = append(out, c)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// CapabilityToContractMap 返回 capability→contract 映射的副本,用途同上。
+func CapabilityToContractMap() map[string]string {
+	out := make(map[string]string, len(capabilityToContract))
+	for k, v := range capabilityToContract {
+		out[k] = v
+	}
+	return out
 }

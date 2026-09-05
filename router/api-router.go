@@ -266,6 +266,7 @@ func SetApiRouter(router *gin.Engine) {
 		canvasAdminRoute.Use(middleware.AdminAuth())
 		{
 			canvasAdminRoute.GET("/models", controller.GetAllCanvasCatalogModelsAdmin)
+			canvasAdminRoute.GET("/meta", controller.GetCanvasCatalogMetaAdmin)
 			canvasAdminRoute.GET("/models/:id", controller.GetCanvasCatalogModelAdmin)
 			canvasAdminRoute.POST("/models", controller.CreateCanvasCatalogModelAdmin)
 			canvasAdminRoute.PUT("/models", controller.UpdateCanvasCatalogModelAdmin)
