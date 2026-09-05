@@ -662,7 +662,13 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 	}
 	// 1. 优先让 adaptor 决定最终额度
 	if actualQuota := adaptor.AdjustBillingOnComplete(task, taskResult); actualQuota > 0 {
-		RecalculateTaskQuota(ctx, task, actualQuota, "adaptor计费调整")
+		bc := task.PrivateData.BillingContext
+		finalQuota, materialClamp, materialCorrected := addMaterialQuotaAtSettle(ctx, task, bc, actualQuota)
+		reason := "adaptor计费调整"
+		if materialCorrected {
+			reason += fmt.Sprintf("，素材修正后素材费 %d", bc.MaterialQuota)
+		}
+		RecalculateTaskQuota(ctx, task, finalQuota, reason, materialClamp)
 		return
 	}
 	// 2. 回退到 token 重算
@@ -764,6 +770,17 @@ func settleVideoSecondBilling(ctx context.Context, task *model.Task, taskResult 
 	baseQuota := secondPrice * common.QuotaPerUnit * bc.GroupRatio
 	actualQuota, clamp := common.QuotaFromFloatChecked(baseQuota * actualSeconds * otherMultiplier)
 
+	// 素材费是固定项冻结:终值 = 生成结算 + 素材结算。估算来源的素材用
+	// 缓存真值修正(后台补探测的成果),修正量计入同一笔差额。
+	actualQuota, materialClamp, materialCorrected := addMaterialQuotaAtSettle(ctx, task, bc, actualQuota)
+	if materialClamp != nil && clamp == nil {
+		clamp = materialClamp
+	}
+	reason := fmt.Sprintf("按秒计费实际时长结算（%.0f 秒 × $%g/秒）", actualSeconds, secondPrice)
+	if materialCorrected {
+		reason += fmt.Sprintf("，素材修正后素材费 %d", bc.MaterialQuota)
+	}
+
 	// 把 seconds 更新为实际时长：RecalculateTaskQuota 会经 taskBillingOther 把
 	// OtherRatios 写进结算日志，必须与真正扣费的口径一致，否则对账时
 	// 日志显示的时长与扣费金额对不上。仅改内存，不回写 private_data。
@@ -772,7 +789,45 @@ func settleVideoSecondBilling(ctx context.Context, task *model.Task, taskResult 
 	}
 	bc.OtherRatios["seconds"] = actualSeconds
 
-	RecalculateTaskQuota(ctx, task, actualQuota,
-		fmt.Sprintf("按秒计费实际时长结算（%.0f 秒 × $%g/秒）", actualSeconds, secondPrice), clamp)
+	RecalculateTaskQuota(ctx, task, actualQuota, reason, clamp)
 	return true
+}
+
+// addMaterialQuotaAtSettle 把素材费并入结算终值并做探测修正。
+// 素材费在提交时已随 task.Quota 预扣,而各结算路径重算出的额度只含生成费,
+// 这里必须加回,否则差额结算会把素材费整笔退掉。估算来源的素材先用缓存真值
+// (后台补探测的成果)重定时长,按提交侧同公式重算素材费,修正量并入同一笔差额。
+// 返回(并入素材费后的终值, 素材侧钳制, 是否发生了素材修正)。
+func addMaterialQuotaAtSettle(ctx context.Context, task *model.Task, bc *model.TaskBillingContext, generationQuota int) (int, *common.QuotaClamp, bool) {
+	if bc == nil || (bc.MaterialQuota == 0 && len(bc.Materials) == 0) {
+		return generationQuota, nil, false
+	}
+	materialQuota := bc.MaterialQuota
+	var clamp *common.QuotaClamp
+	corrected := false
+	if correctedMaterials, changed := RefreshMaterialDurationsAtSettle(bc.Materials); changed {
+		// 与提交侧(ResolveInputMaterials)同公式:图按每张价、音视频按时长×
+		// 每秒价,×分组倍率后转额度。结算侧用 QuotaRoundChecked(半舍入对账)
+		// 而提交侧用 QuotaFromFloatChecked(截断保守),口径差异是有意为之。
+		before := bc.MaterialQuota
+		recomputed := 0
+		for _, m := range correctedMaterials {
+			entry := m.UnitPrice
+			if m.MaterialType != types.MaterialTypeImage {
+				entry = m.Seconds * m.UnitPrice
+			}
+			q, c := common.QuotaRoundChecked(entry * bc.GroupRatio * common.QuotaPerUnit)
+			if c != nil && clamp == nil {
+				clamp = c
+			}
+			recomputed += q
+		}
+		// 写回修正后的清单(settle_corrected 来源标记随清单保留)与重算额度。
+		bc.Materials = correctedMaterials
+		bc.MaterialQuota = recomputed
+		materialQuota = recomputed
+		corrected = true
+		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 素材费结算修正:%d → %d", task.TaskID, before, recomputed))
+	}
+	return common.AddQuotaSaturating(generationQuota, materialQuota), clamp, corrected
 }
