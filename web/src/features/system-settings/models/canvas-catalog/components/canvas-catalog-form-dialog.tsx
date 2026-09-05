@@ -35,14 +35,25 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 
 import {
+  useCanvasCatalogMeta,
+  useCanvasCatalogModel,
+} from '../hooks/use-canvas-catalog'
+import {
   useCreateCanvasCatalogModel,
   useUpdateCanvasCatalogModel,
 } from '../hooks/use-canvas-catalog-mutations'
-import { useCanvasCatalogModel } from '../hooks/use-canvas-catalog'
 import { useContractStats } from '../hooks/use-contract-stats'
 import { SchemaOverrideEditor } from './schema-override/schema-override-editor'
 
@@ -89,20 +100,17 @@ const EMPTY_VALUES: FormValues = {
   sort_order: 0,
 }
 
-// 与后端 constant.ContractForCapability(constant/canvas_contract.go)保持同一份映射。
-// 画布侧总共只有两个契约,与 capability 一一对应 —— 见该文件注释。这里只做
-// UI 层的即时预填,后端在 create/update 时仍会按同一映射兜底一次,前端猜错
-// 或漏填都不会导致条目落库出错。
-const CONTRACT_BY_CAPABILITY: Record<string, string> = {
-  video_gen: 'relay_video_async_v1',
-  image_gen: 'relay_image_async_v1',
-}
-
-function deriveContractFromCapabilities(raw: string): string | null {
+// capability → contract 的推导改为消费后端 /api/canvas/admin/meta 下发的映射,
+// 消除与 constant/canvas_contract.go 的双源硬编码(2026-09-04 spec 3.8)。
+// eslint-disable-next-line react-refresh/only-export-components
+export function deriveContractFromCapabilities(
+  raw: string,
+  map: Record<string, string>
+): string | null {
   for (const part of raw.split(/[,，、;；\s]+/)) {
     const trimmed = part.trim()
-    if (trimmed && CONTRACT_BY_CAPABILITY[trimmed]) {
-      return CONTRACT_BY_CAPABILITY[trimmed]
+    if (trimmed && map[trimmed]) {
+      return map[trimmed]
     }
   }
   return null
@@ -130,12 +138,15 @@ export function CanvasCatalogFormDialog({
   const { t } = useTranslation()
   const isEdit = Boolean(editingId)
   const [isSaving, setIsSaving] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const createModel = useCreateCanvasCatalogModel()
   const updateModel = useUpdateCanvasCatalogModel()
   const {
     data: currentModel,
     isLoading: isLoadingModel,
+    isError: isLoadingModelError,
   } = useCanvasCatalogModel(editingId ?? null, open && isEdit)
+  const { data: meta } = useCanvasCatalogMeta(open)
 
   const form = useForm<FormValues>({ defaultValues: EMPTY_VALUES })
   const { data: contractStats } = useContractStats()
@@ -143,8 +154,7 @@ export function CanvasCatalogFormDialog({
   // 过(逃生舱),或是编辑既有条目(已经有权威值),都不再覆盖。
   const contractManuallyEdited = useRef(false)
 
-  // 契约名 → 支持率文案。契约字段是自由文本输入(不是下拉),摸底确认后按
-  // 「字段下方提示列表」渲染,而非选项后缀。
+  // 契约名 → 支持率文案。摸底确认后按「字段下方提示列表」渲染,而非选项后缀。
   // 「没有任何客户端支持」必须显式显示为 0/N,不能留空 —— 那正是这个功能
   // 存在的理由(运营方上架了一个没人能用的模型)。
   const contractSupportLabel = (contract: string): string | null => {
@@ -182,6 +192,14 @@ export function CanvasCatalogFormDialog({
     }
   }, [open, isEdit, currentModel, prefillRemoteId, form])
 
+  // 编辑加载失败时表单只会渲染空默认值,必须显式告知并禁止提交,避免把
+  // 空表单当新条目保存而静默清掉原配置。
+  useEffect(() => {
+    if (open && isEdit && isLoadingModelError) {
+      toast.error(t('加载目录条目失败'))
+    }
+  }, [open, isEdit, isLoadingModelError, t])
+
   const onSubmit = async (values: FormValues) => {
     setIsSaving(true)
     try {
@@ -218,7 +236,9 @@ export function CanvasCatalogFormDialog({
       title={isEdit ? t('编辑目录条目') : t('新增目录条目')}
       description={
         isEdit
-          ? t('更新 "{{name}}" 的信息', { name: currentModel?.display_name ?? '' })
+          ? t('更新 "{{name}}" 的信息', {
+              name: currentModel?.display_name ?? '',
+            })
           : t('添加一条画布可同步的模型目录条目')
       }
       contentHeight='auto'
@@ -233,8 +253,14 @@ export function CanvasCatalogFormDialog({
           >
             {t('取消')}
           </Button>
-          <Button type='submit' form={FORM_ID} disabled={isSaving}>
-            {isSaving ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : null}
+          <Button
+            type='submit'
+            form={FORM_ID}
+            disabled={isSaving || (isEdit && isLoadingModelError)}
+          >
+            {isSaving ? (
+              <Loader2 className='mr-2 h-4 w-4 animate-spin' />
+            ) : null}
             {submitLabel}
           </Button>
         </>
@@ -248,254 +274,324 @@ export function CanvasCatalogFormDialog({
       ) : null}
 
       {!(isEdit && isLoadingModel) && (
-      <Form {...form}>
-        <form
-          id={FORM_ID}
-          onSubmit={form.handleSubmit(onSubmit)}
-          className='space-y-4'
-        >
-          <FormField
-            control={form.control}
-            name='remote_id'
-            rules={{ required: t('remote_id 不能为空') }}
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t('Remote ID *')}</FormLabel>
-                <FormControl>
-                  <Input
-                    placeholder='sd5-seedance-2.0'
-                    disabled={!isEdit && Boolean(prefillRemoteId)}
-                    {...field}
-                  />
-                </FormControl>
-                <FormDescription>
-                  {!isEdit && prefillRemoteId
-                    ? t('从「未配置」列表打开,已按该模型在中转站的名称锁定')
-                    : t('对应上游 API 实际使用的模型标识')}
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          <FormField
-            control={form.control}
-            name='display_name'
-            rules={{ required: t('显示名称不能为空') }}
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t('显示名称 *')}</FormLabel>
-                <FormControl>
-                  <Input placeholder='seedance 2.0 满血' {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          <FormField
-            control={form.control}
-            name='capabilities'
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t('能力')}</FormLabel>
-                <FormControl>
-                  <Input
-                    placeholder='video_gen'
-                    {...field}
-                    onChange={(e) => {
-                      field.onChange(e)
-                      // 新建且管理员未手动改过 contract 时才自动预填 —— 编辑既有
-                      // 条目或手改过之后都不再覆盖(逃生舱)。
-                      if (!isEdit && !contractManuallyEdited.current) {
-                        const derived = deriveContractFromCapabilities(e.target.value)
-                        if (derived) form.setValue('contract', derived)
-                      }
-                    }}
-                  />
-                </FormControl>
-                <FormDescription>
-                  {t('逗号分隔,如 video_gen,VideoGen')}
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          <FormField
-            control={form.control}
-            name='contract'
-            rules={{ required: t('contract 不能为空') }}
-            render={({ field }) => {
-              const supportLabel = contractSupportLabel(field.value)
-              return (
+        <Form {...form}>
+          <form
+            id={FORM_ID}
+            onSubmit={form.handleSubmit(onSubmit)}
+            className='space-y-4'
+          >
+            <FormField
+              control={form.control}
+              name='remote_id'
+              rules={{ required: t('remote_id 不能为空') }}
+              render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Contract *')}</FormLabel>
+                  <FormLabel>{t('Remote ID *')}</FormLabel>
                   <FormControl>
                     <Input
-                      placeholder='relay_video_async_v1'
+                      placeholder='sd5-seedance-2.0'
+                      disabled={!isEdit && Boolean(prefillRemoteId)}
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {!isEdit && prefillRemoteId
+                      ? t('从「未配置」列表打开,已按该模型在中转站的名称锁定')
+                      : t('对应上游 API 实际使用的模型标识')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='display_name'
+              rules={{ required: t('显示名称不能为空') }}
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('显示名称 *')}</FormLabel>
+                  <FormControl>
+                    <Input placeholder='seedance 2.0 满血' {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='capabilities'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('能力')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      placeholder='video_gen'
                       {...field}
                       onChange={(e) => {
-                        // 手改即视为逃生舱:此后不再被能力字段的自动预填覆盖。
-                        contractManuallyEdited.current = true
                         field.onChange(e)
+                        // 新建且管理员未手动改过 contract 时才自动预填 —— 编辑既有
+                        // 条目或手改过之后都不再覆盖(逃生舱)。
+                        if (
+                          !isEdit &&
+                          !contractManuallyEdited.current &&
+                          meta
+                        ) {
+                          const derived = deriveContractFromCapabilities(
+                            e.target.value,
+                            meta.capability_to_contract
+                          )
+                          if (derived) form.setValue('contract', derived)
+                        }
                       }}
                     />
                   </FormControl>
                   <FormDescription>
-                    {t('必须对应画布客户端已内置的 profile 模板 ID,填错该条目会被画布逐条跳过')}
+                    {t('逗号分隔,如 video_gen,VideoGen')}
+                    {meta && Object.keys(meta.capability_to_contract).length > 0
+                      ? `;${t('已知能力')}: ${Object.keys(meta.capability_to_contract).join(', ')}`
+                      : null}
                   </FormDescription>
-                  {supportLabel ? (
-                    <FormDescription>{supportLabel}</FormDescription>
-                  ) : null}
                   <FormMessage />
                 </FormItem>
-              )
-            }}
-          />
+              )}
+            />
 
-          <FormField
-            control={form.control}
-            name='enabled'
-            render={({ field }) => (
-              <FormItem className='flex items-center justify-between gap-4'>
-                <div>
-                  <FormLabel>{t('启用')}</FormLabel>
+            <FormField
+              control={form.control}
+              name='contract'
+              rules={{ required: t('contract 不能为空') }}
+              render={({ field }) => {
+                const supportLabel = contractSupportLabel(field.value)
+                const options = meta?.supported_contracts ?? []
+                // 手填逃生舱:存量值不在后端下发清单里时,追加为额外选项,不丢值。
+                const extra =
+                  field.value && !options.includes(field.value)
+                    ? [field.value]
+                    : []
+                const selectOptions = [...options, ...extra]
+                return (
+                  <FormItem>
+                    <FormLabel>{t('Contract *')}</FormLabel>
+                    <Select
+                      items={selectOptions.map((c) => ({ value: c, label: c }))}
+                      value={field.value}
+                      onValueChange={(v) => {
+                        if (v == null) return
+                        // 手改即视为逃生舱:此后不再被能力字段的自动预填覆盖。
+                        contractManuallyEdited.current = true
+                        field.onChange(v)
+                      }}
+                    >
+                      <FormControl>
+                        <SelectTrigger disabled={!meta} className='w-full'>
+                          <SelectValue
+                            placeholder={t('选择画布客户端支持的契约')}
+                          />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          {selectOptions.map((c) => (
+                            <SelectItem key={c} value={c}>
+                              {c}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>
+                      {meta
+                        ? t(
+                            '必须对应画布客户端已内置的 profile 模板 ID,填错该条目会被画布逐条跳过'
+                          )
+                        : t('正在加载受支持的契约列表...')}
+                    </FormDescription>
+                    {supportLabel ? (
+                      <FormDescription>{supportLabel}</FormDescription>
+                    ) : null}
+                    <FormMessage />
+                  </FormItem>
+                )
+              }}
+            />
+
+            <FormField
+              control={form.control}
+              name='enabled'
+              render={({ field }) => (
+                <FormItem className='flex items-center justify-between gap-4'>
+                  <div>
+                    <FormLabel>{t('启用')}</FormLabel>
+                    <FormDescription>
+                      {t(
+                        '停用后画布仍保留该模型记录,但不可再发起新生成(软下线)'
+                      )}
+                    </FormDescription>
+                  </div>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+
+            <FormItem>
+              <FormLabel>{t('说明')}</FormLabel>
+              <div className='text-muted-foreground rounded-md border px-3 py-2 text-sm whitespace-pre-wrap'>
+                {currentModel?.description ||
+                  t('暂无说明,可在模型管理页为该模型添加')}
+              </div>
+              <FormDescription>
+                {t(
+                  '说明统一在「模型管理」页维护,目录侧只读;画布客户端与定价页均使用这份说明'
+                )}
+                <Link
+                  to='/models/$section'
+                  params={{ section: 'metadata' }}
+                  className='text-primary ml-1 hover:underline'
+                >
+                  {t('去模型管理页编辑')}
+                </Link>
+              </FormDescription>
+            </FormItem>
+
+            <FormField
+              control={form.control}
+              name='pricing'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('价格')}</FormLabel>
+                  <FormControl>
+                    <Input placeholder='2.8元/条' {...field} />
+                  </FormControl>
                   <FormDescription>
-                    {t('停用后画布仍保留该模型记录,但不可再发起新生成(软下线)')}
+                    {t(
+                      '展示给画布用户的价格文案;留空时客户端按分组价格自动展示'
+                    )}
                   </FormDescription>
-                </div>
-                <FormControl>
-                  <Switch checked={field.value} onCheckedChange={field.onChange} />
-                </FormControl>
-              </FormItem>
-            )}
-          />
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-          <FormItem>
-            <FormLabel>{t('说明')}</FormLabel>
-            <div className='text-muted-foreground rounded-md border px-3 py-2 text-sm whitespace-pre-wrap'>
-              {currentModel?.description || t('暂无说明,可在模型管理页为该模型添加')}
-            </div>
-            <FormDescription>
-              {t('说明统一在「模型管理」页维护,目录侧只读;画布客户端与定价页均使用这份说明')}
-              <Link
-                to='/models/$section'
-                params={{ section: 'metadata' }}
-                className='text-primary ml-1 hover:underline'
-              >
-                {t('去模型管理页编辑')}
-              </Link>
-            </FormDescription>
-          </FormItem>
+            <Button
+              type='button'
+              variant='ghost'
+              size='sm'
+              className='self-start'
+              onClick={() => setShowAdvanced((v) => !v)}
+            >
+              {showAdvanced ? t('收起高级设置') : t('高级设置')}
+            </Button>
+            {showAdvanced ? (
+              <>
+                <FormField
+                  control={form.control}
+                  name='limitations'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('限制说明')}</FormLabel>
+                      <FormControl>
+                        <Textarea rows={2} {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-          <FormField
-            control={form.control}
-            name='pricing'
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t('价格')}</FormLabel>
-                <FormControl>
-                  <Input placeholder='2.8元/条' {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+                <FormField
+                  control={form.control}
+                  name='param_schema'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('参数表单 (JSON)')}</FormLabel>
+                      <FormControl>
+                        <Textarea
+                          rows={4}
+                          className='font-mono text-xs'
+                          placeholder='{"duration": {"type": "integer", ...}}'
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t('仅供画布渲染表单,不参与请求格式校验,留空即可')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-          <FormField
-            control={form.control}
-            name='limitations'
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t('限制说明')}</FormLabel>
-                <FormControl>
-                  <Textarea rows={2} {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+                <FormField
+                  control={form.control}
+                  name='schema_override'
+                  rules={{ validate: validateOptionalJson }}
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormControl>
+                        <SchemaOverrideEditor
+                          value={field.value}
+                          onChange={field.onChange}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-          <FormField
-            control={form.control}
-            name='param_schema'
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t('参数表单 (JSON)')}</FormLabel>
-                <FormControl>
-                  <Textarea
-                    rows={4}
-                    className='font-mono text-xs'
-                    placeholder='{"duration": {"type": "integer", ...}}'
-                    {...field}
+                <div className='grid grid-cols-2 gap-4'>
+                  <FormField
+                    control={form.control}
+                    name='requires_vocab'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('所需词汇版本')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            min={1}
+                            {...field}
+                            onChange={(e) =>
+                              field.onChange(e.target.valueAsNumber)
+                            }
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t('高于画布当前支持版本的条目会被跳过')}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
                   />
-                </FormControl>
-                <FormDescription>
-                  {t('仅供画布渲染表单,不参与请求格式校验,留空即可')}
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
 
-          <FormField
-            control={form.control}
-            name='schema_override'
-            rules={{ validate: validateOptionalJson }}
-            render={({ field }) => (
-              <FormItem>
-                <FormControl>
-                  <SchemaOverrideEditor value={field.value} onChange={field.onChange} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          <div className='grid grid-cols-2 gap-4'>
-            <FormField
-              control={form.control}
-              name='requires_vocab'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('所需词汇版本')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      min={1}
-                      {...field}
-                      onChange={(e) => field.onChange(e.target.valueAsNumber)}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t('高于画布当前支持版本的条目会被跳过')}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='sort_order'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('排序')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      {...field}
-                      onChange={(e) => field.onChange(e.target.valueAsNumber)}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-        </form>
-      </Form>
+                  <FormField
+                    control={form.control}
+                    name='sort_order'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('排序')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            {...field}
+                            onChange={(e) =>
+                              field.onChange(e.target.valueAsNumber)
+                            }
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+              </>
+            ) : null}
+          </form>
+        </Form>
       )}
     </Dialog>
   )

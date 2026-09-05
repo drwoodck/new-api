@@ -26,13 +26,6 @@ interface ApiResponse<T = unknown> {
   data?: T
 }
 
-export async function getCanvasCatalogModels(): Promise<
-  ApiResponse<CanvasCatalogModel[]>
-> {
-  const res = await api.get('/api/canvas/admin/models')
-  return res.data
-}
-
 export async function createCanvasCatalogModel(
   data: Omit<CanvasCatalogModel, 'id'>
 ): Promise<ApiResponse<CanvasCatalogModel>> {
@@ -84,12 +77,26 @@ export async function fetchContractStats(): Promise<
  * All relay-enabled models (whether or not a canvas catalog entry exists yet)
  * joined against their catalog config and per-group prices. Backs the
  * "已配置完成 / 未配置" two-tab overview — deliberately a separate read
- * endpoint from getCanvasCatalogModels, whose response shape the edit form
+ * endpoint from getCanvasCatalogModel, whose response shape the edit form
  * consumes directly.
  */
 export async function fetchCanvasCatalogOverview(): Promise<
   ApiResponse<CanvasCatalogOverviewRow[]>
 > {
   const res = await api.get('/api/canvas/admin/catalog-overview')
+  return res.data
+}
+
+// 契约能力映射与受支持契约清单由后端统一下发(见 controller/canvas_catalog_meta.go),
+// 前端不再与 constant/canvas_contract.go 维护一份硬编码副本。
+export interface CanvasCatalogMeta {
+  supported_contracts: string[]
+  capability_to_contract: Record<string, string>
+}
+
+export async function fetchCanvasCatalogMeta(): Promise<
+  ApiResponse<CanvasCatalogMeta>
+> {
+  const res = await api.get('/api/canvas/admin/meta')
   return res.data
 }
