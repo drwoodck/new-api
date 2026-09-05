@@ -70,6 +70,9 @@ func CreateCanvasCatalogModelAdmin(c *gin.Context) {
 		common.ApiErrorMsg(c, "display_name 不能为空")
 		return
 	}
+	// 说明真源在 models 表(2026-09-04 spec 3.6):目录侧不接受 description 入参,
+	// 旧客户端带来的值一律丢弃,防止绕过前端重新制造第二份说明。
+	m.Description = ""
 	deriveContractIfEmpty(&m)
 	if m.Contract == "" {
 		common.ApiErrorMsg(c, "contract 不能为空,且无法从 capabilities 推导(未知 capability),请手填")

@@ -245,3 +245,44 @@ func TestUpdateCanvasCatalogModelAdminDerivesContractFromCapability(t *testing.T
 	require.NoError(t, json.Unmarshal(resp.Data, &updated))
 	assert.Equal(t, "relay_image_async_v1", updated.Contract)
 }
+
+// TestUpdateCanvasCatalogModelAdminDoesNotOverwriteDescription 锁住说明冻结:
+// 说明真源已迁到 models 表,目录更新不得再用表单空值/旧值覆盖存量 description
+// (2026-09-04 spec 3.6)。存量文字只读,供 wire 在无 models 行时回退。
+func TestUpdateCanvasCatalogModelAdminDoesNotOverwriteDescription(t *testing.T) {
+	router := setupCatalogAdminTestDB(t)
+
+	existing := model.CanvasCatalogModel{
+		RemoteID: "desc-frozen", DisplayName: "Old", Contract: "relay_video_async_v1",
+		Description: "legacy text",
+	}
+	require.NoError(t, existing.Insert())
+
+	w, resp := doJSON(t, router, "PUT", "/api/canvas/admin/models", model.CanvasCatalogModel{
+		Id: existing.Id, RemoteID: "desc-frozen", DisplayName: "New",
+		Contract: "relay_video_async_v1", Description: "hacked",
+	})
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.True(t, resp.Success, resp.Message)
+
+	updated, err := model.GetCanvasCatalogModelByID(existing.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "legacy text", updated.Description)
+}
+
+// TestCreateCanvasCatalogModelAdminIgnoresDescription 新建同样不接受 description
+// 入参 —— 客户端说明统一从 models 表带出,目录侧不再产生新说明。
+func TestCreateCanvasCatalogModelAdminIgnoresDescription(t *testing.T) {
+	router := setupCatalogAdminTestDB(t)
+
+	w, resp := doJSON(t, router, "POST", "/api/canvas/admin/models", model.CanvasCatalogModel{
+		RemoteID: "desc-ignored", DisplayName: "Ignored", Contract: "relay_video_async_v1",
+		Description: "should be dropped",
+	})
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.True(t, resp.Success, resp.Message)
+
+	var created model.CanvasCatalogModel
+	require.NoError(t, json.Unmarshal(resp.Data, &created))
+	assert.Empty(t, created.Description)
+}

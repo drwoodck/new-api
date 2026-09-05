@@ -73,12 +73,15 @@ func (c *CanvasCatalogModel) Insert() error {
 // Update 更新目录条目。显式 Select 白名单可写字段,规避 GORM"结构体形式 Updates
 // 跳过零值字段"的坑——否则 Enabled=false / 空字符串等零值永远无法写回数据库,
 // 且顺带保护 Id/CreatedTime/DeletedAt 不被意外清零。
+//
+// description 不在白名单里:说明真源已统一到 models 表(2026-09-04 spec 3.6),
+// 目录侧对存量文字只读——编辑表单不再携带它,任何 update 都不得覆盖。
 func (c *CanvasCatalogModel) Update() error {
 	c.UpdatedTime = common.GetTimestamp()
 	return DB.Model(&CanvasCatalogModel{}).Where("id = ?", c.Id).
 		Select(
 			"remote_id", "display_name", "capabilities", "enabled",
-			"description", "pricing", "limitations", "contract",
+			"pricing", "limitations", "contract",
 			"param_schema", "schema_override", "requires_vocab",
 			"sort_order", "updated_time",
 		).
