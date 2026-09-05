@@ -54,6 +54,13 @@ export async function deleteCanvasCatalogModel(
   return res.data
 }
 
+export async function getCanvasCatalogModel(
+  id: number
+): Promise<ApiResponse<CanvasCatalogModel>> {
+  const res = await api.get(`/api/canvas/admin/models/${id}`)
+  return res.data
+}
+
 export interface ContractStat {
   contract: string
   supported: number

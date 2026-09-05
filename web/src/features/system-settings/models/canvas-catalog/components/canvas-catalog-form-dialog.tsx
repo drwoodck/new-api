@@ -41,14 +41,15 @@ import {
   useCreateCanvasCatalogModel,
   useUpdateCanvasCatalogModel,
 } from '../hooks/use-canvas-catalog-mutations'
+import { useCanvasCatalogModel } from '../hooks/use-canvas-catalog'
 import { useContractStats } from '../hooks/use-contract-stats'
 import { SchemaOverrideEditor } from './schema-override/schema-override-editor'
-import type { CanvasCatalogModel } from '../types'
 
 type CanvasCatalogFormDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
-  currentModel?: CanvasCatalogModel | null
+  // 编辑时传目录条目 id:对话框内部拉全量条目(overview 行缺列,不能直接喂表单)。
+  editingId?: number | null
   // Set when opened from the "未配置" overview tab's "配置画布参数" action:
   // the relay model name is already known and fixed (it's the join key with
   // abilities), so the field is pre-filled and locked rather than left for
@@ -124,14 +125,18 @@ function validateOptionalJson(value: string): string | true {
 export function CanvasCatalogFormDialog({
   open,
   onOpenChange,
-  currentModel,
+  editingId,
   prefillRemoteId,
 }: CanvasCatalogFormDialogProps) {
   const { t } = useTranslation()
-  const isEdit = Boolean(currentModel?.id)
+  const isEdit = Boolean(editingId)
   const [isSaving, setIsSaving] = useState(false)
   const createModel = useCreateCanvasCatalogModel()
   const updateModel = useUpdateCanvasCatalogModel()
+  const {
+    data: currentModel,
+    isLoading: isLoadingModel,
+  } = useCanvasCatalogModel(editingId ?? null, open && isEdit)
 
   const form = useForm<FormValues>({ defaultValues: EMPTY_VALUES })
   const { data: contractStats } = useContractStats()
@@ -165,7 +170,6 @@ export function CanvasCatalogFormDialog({
         capabilities: currentModel.capabilities || '',
         contract: currentModel.contract,
         enabled: currentModel.enabled,
-        description: currentModel.description || '',
         pricing: currentModel.pricing || '',
         limitations: currentModel.limitations || '',
         param_schema: currentModel.param_schema || '',
@@ -187,9 +191,11 @@ export function CanvasCatalogFormDialog({
         requires_vocab: Number(values.requires_vocab) || 1,
         sort_order: Number(values.sort_order) || 0,
       }
-      const response = isEdit
-        ? await updateModel.mutateAsync({ ...payload, id: currentModel!.id })
-        : await createModel.mutateAsync(payload)
+      // isEdit 即 editingId 非空,但 TS 无法从布尔派生收窄,这里显式判空。
+      const response =
+        isEdit && editingId != null
+          ? await updateModel.mutateAsync({ ...payload, id: editingId })
+          : await createModel.mutateAsync(payload)
 
       if (response.success) {
         onOpenChange(false)
@@ -202,6 +208,10 @@ export function CanvasCatalogFormDialog({
     }
   }
 
+  // 拆开写避免嵌套三元(lint 规则 no-nested-ternary)。
+  const actionLabel = isEdit ? t('更新') : t('创建')
+  const submitLabel = isSaving ? t('保存中...') : actionLabel
+
   return (
     <Dialog
       open={open}
@@ -209,7 +219,7 @@ export function CanvasCatalogFormDialog({
       title={isEdit ? t('编辑目录条目') : t('新增目录条目')}
       description={
         isEdit
-          ? t('更新 "{{name}}" 的信息', { name: currentModel?.display_name })
+          ? t('更新 "{{name}}" 的信息', { name: currentModel?.display_name ?? '' })
           : t('添加一条画布可同步的模型目录条目')
       }
       contentHeight='auto'
@@ -226,11 +236,19 @@ export function CanvasCatalogFormDialog({
           </Button>
           <Button type='submit' form={FORM_ID} disabled={isSaving}>
             {isSaving ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : null}
-            {isSaving ? t('保存中...') : isEdit ? t('更新') : t('创建')}
+            {submitLabel}
           </Button>
         </>
       }
     >
+      {isEdit && isLoadingModel ? (
+        <div className='text-muted-foreground flex items-center justify-center gap-2 py-8 text-sm'>
+          <Loader2 className='h-4 w-4 animate-spin' />
+          {t('加载中...')}
+        </div>
+      ) : null}
+
+      {!(isEdit && isLoadingModel) && (
       <Form {...form}>
         <form
           id={FORM_ID}
@@ -476,6 +494,7 @@ export function CanvasCatalogFormDialog({
           </div>
         </form>
       </Form>
+      )}
     </Dialog>
   )
 }

@@ -29,24 +29,7 @@ import { CanvasCatalogFormDialog } from './components/canvas-catalog-form-dialog
 import { CanvasCatalogOverviewTable } from './components/canvas-catalog-overview-table'
 import { useDeleteCanvasCatalogModel } from './hooks/use-canvas-catalog-mutations'
 import { useCanvasCatalogOverview } from './hooks/use-canvas-catalog'
-import type { CanvasCatalogModel, CanvasCatalogOverviewRow } from './types'
-
-// canvas-catalog-overview-row 的 catalog_id=0 means there's no catalog entry
-// yet (the "未配置" case) — nothing to feed the edit/delete dialogs.
-function overviewRowToCatalogModel(
-  row: CanvasCatalogOverviewRow
-): CanvasCatalogModel {
-  return {
-    id: row.catalog_id,
-    remote_id: row.model_name,
-    display_name: row.display_name,
-    capabilities: row.capabilities,
-    enabled: row.catalog_enabled,
-    contract: row.contract,
-    requires_vocab: 1,
-    sort_order: 0,
-  }
-}
+import type { CanvasCatalogOverviewRow } from './types'
 
 export function CanvasCatalogSection() {
   const { t } = useTranslation()
@@ -54,9 +37,7 @@ export function CanvasCatalogSection() {
   const deleteModel = useDeleteCanvasCatalogModel()
 
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [editingModel, setEditingModel] = useState<CanvasCatalogModel | null>(
-    null
-  )
+  const [editingId, setEditingId] = useState<number | null>(null)
   const [prefillRemoteId, setPrefillRemoteId] = useState<string | undefined>(
     undefined
   )
@@ -74,19 +55,22 @@ export function CanvasCatalogSection() {
   }, [overviewRows])
 
   const handleCreate = () => {
-    setEditingModel(null)
+    setEditingId(null)
     setPrefillRemoteId(undefined)
     setDialogOpen(true)
   }
 
   const handleConfigure = (row: CanvasCatalogOverviewRow) => {
-    setEditingModel(null)
+    setEditingId(null)
     setPrefillRemoteId(row.model_name)
     setDialogOpen(true)
   }
 
   const handleEdit = (row: CanvasCatalogOverviewRow) => {
-    setEditingModel(overviewRowToCatalogModel(row))
+    // 按 id 打开编辑;对话框内部会 GET /api/canvas/admin/models/:id 拉全量
+    // 条目再渲染 —— overview 行不含 description/pricing 等列,用它拼表单会
+    // 把库里的文字覆盖成空(2026-09-04 修复的数据丢失 bug)。
+    setEditingId(row.catalog_id)
     setPrefillRemoteId(undefined)
     setDialogOpen(true)
   }
@@ -94,7 +78,7 @@ export function CanvasCatalogSection() {
   const handleDialogChange = (open: boolean) => {
     setDialogOpen(open)
     if (!open) {
-      setEditingModel(null)
+      setEditingId(null)
       setPrefillRemoteId(undefined)
     }
   }
@@ -167,7 +151,7 @@ export function CanvasCatalogSection() {
       <CanvasCatalogFormDialog
         open={dialogOpen}
         onOpenChange={handleDialogChange}
-        currentModel={editingModel}
+        editingId={editingId}
         prefillRemoteId={prefillRemoteId}
       />
 

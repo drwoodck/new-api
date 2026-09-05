@@ -18,7 +18,11 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 
-import { fetchCanvasCatalogOverview, getCanvasCatalogModels } from '../api'
+import {
+  fetchCanvasCatalogOverview,
+  getCanvasCatalogModel,
+  getCanvasCatalogModels,
+} from '../api'
 
 export function useCanvasCatalogModels() {
   return useQuery({
@@ -37,5 +41,20 @@ export function useCanvasCatalogOverview() {
       const res = await fetchCanvasCatalogOverview()
       return res.data ?? []
     },
+  })
+}
+
+export function useCanvasCatalogModel(id: number | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['canvas-catalog-model', id],
+    queryFn: async () => {
+      if (id == null) return null
+      const res = await getCanvasCatalogModel(id)
+      return res.data ?? null
+    },
+    // 目录条目量小且编辑是即时操作;编辑期间不换页,无需长缓存
+    staleTime: 0,
+    gcTime: 0,
+    enabled: enabled && id != null,
   })
 }
