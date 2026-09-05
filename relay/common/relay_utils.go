@@ -177,15 +177,16 @@ func DefaultVideoDurationSeconds(channelType int) int {
 	return 5
 }
 
-// ResolveTaskVideoDuration determines the billable duration in seconds for a
-// video task request. Priority: duration > seconds > metadata > channel default.
-// The result is clamped to MaxTaskDurationSeconds because it is used directly
-// as a billing multiplier and metadata bypasses standard request validation.
-func ResolveTaskVideoDuration(c *gin.Context, channelType int) int {
-	fallback := DefaultVideoDurationSeconds(channelType)
+// ResolveTaskExplicitDuration returns the request's explicit video duration
+// hint (duration > seconds > metadata), clamped to MaxTaskDurationSeconds.
+// Unlike ResolveTaskVideoDuration there is no channel default fallback: 0
+// means the request said nothing, so callers can tell "explicit" from
+// "guessed" — input material billing only accepts explicit hints as the
+// materialSourceExplicit duration source.
+func ResolveTaskExplicitDuration(c *gin.Context) int {
 	req, err := GetTaskRequest(c)
 	if err != nil {
-		return fallback
+		return 0
 	}
 	if req.Duration > 0 {
 		return min(req.Duration, MaxTaskDurationSeconds)
@@ -195,6 +196,18 @@ func ResolveTaskVideoDuration(c *gin.Context, channelType int) int {
 	}
 	if seconds := durationFromMetadata(req.Metadata); seconds > 0 {
 		return min(seconds, MaxTaskDurationSeconds)
+	}
+	return 0
+}
+
+// ResolveTaskVideoDuration determines the billable duration in seconds for a
+// video task request. Priority: duration > seconds > metadata > channel default.
+// The result is clamped to MaxTaskDurationSeconds because it is used directly
+// as a billing multiplier and metadata bypasses standard request validation.
+func ResolveTaskVideoDuration(c *gin.Context, channelType int) int {
+	fallback := DefaultVideoDurationSeconds(channelType)
+	if explicit := ResolveTaskExplicitDuration(c); explicit > 0 {
+		return explicit
 	}
 	return fallback
 }

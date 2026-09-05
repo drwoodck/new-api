@@ -631,6 +631,10 @@ func RelayTask(c *gin.Context) {
 			TierType:     relayInfo.PriceData.TierType,
 			TierKey:      relayInfo.PriceData.TierKey,
 			TierSnapshot: relayInfo.PriceData.TierSnapshot,
+			// 素材计费快照：提交时定稿的清单与额度（素材费是固定项冻结，
+			// 结算只做探测修正，不做重新定价）。
+			MaterialQuota: relayInfo.PriceData.MaterialQuota,
+			Materials:     relayInfo.PriceData.Materials,
 		}
 		task.Quota = result.Quota
 		task.Data = result.TaskData

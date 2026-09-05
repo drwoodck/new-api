@@ -148,6 +148,41 @@ func TestResolveTaskVideoDurationIgnoresNonPositive(t *testing.T) {
 	}
 }
 
+// TestResolveTaskExplicitDuration pins the explicit-hint-only entry point used
+// by input material billing: it must return the same request hints as
+// ResolveTaskVideoDuration (duration > seconds > metadata, clamped) but 0 —
+// never a channel default — when the request says nothing, so callers can
+// distinguish "explicit" from "guessed" durations.
+func TestResolveTaskExplicitDuration(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *TaskSubmitReq
+		want int
+	}{
+		{name: "duration field", req: &TaskSubmitReq{Duration: 7, Seconds: "3"}, want: 7},
+		{name: "seconds string", req: &TaskSubmitReq{Seconds: "9"}, want: 9},
+		{name: "metadata durationSeconds float", req: &TaskSubmitReq{Metadata: map[string]interface{}{"durationSeconds": float64(6)}}, want: 6},
+		{name: "metadata duration string", req: &TaskSubmitReq{Metadata: map[string]interface{}{"duration": "11"}}, want: 11},
+		{
+			name: "no hint must not fall back to channel default",
+			req:  &TaskSubmitReq{},
+			want: 0,
+		},
+		{name: "missing task request", req: nil, want: 0},
+		{name: "non-positive hints are ignored", req: &TaskSubmitReq{Duration: -5, Seconds: "0"}, want: 0},
+		{
+			name: "oversized metadata hint is clamped",
+			req:  &TaskSubmitReq{Metadata: map[string]interface{}{"durationSeconds": float64(9999999)}},
+			want: MaxTaskDurationSeconds,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, ResolveTaskExplicitDuration(newDurationContext(tt.req)))
+		})
+	}
+}
+
 func TestDefaultVideoDurationSeconds(t *testing.T) {
 	require.Equal(t, 4, DefaultVideoDurationSeconds(constant.ChannelTypeSora))
 	require.Equal(t, 4, DefaultVideoDurationSeconds(constant.ChannelTypeOpenAI),

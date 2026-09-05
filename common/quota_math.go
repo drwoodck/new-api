@@ -167,6 +167,17 @@ func QuotaFromDecimalStrict(d decimal.Decimal) (int, error) {
 	return strictQuota(QuotaFromDecimalChecked(d))
 }
 
+// AddQuotaSaturating 饱和加法：素材费等加法计费维度并入总额时使用，
+// 防止两项各自合法的额度相加越过 int32 边界（单请求饱和边界，与既有
+// QuotaFromFloatChecked 一致）。
+func AddQuotaSaturating(a, b int) int {
+	sum := a + b
+	if sum > MaxQuota || (b > 0 && sum < a) {
+		return MaxQuota
+	}
+	return sum
+}
+
 // WalletQuotaFromDecimalStrict converts wallet and top-up values within the
 // JavaScript-safe integer range, which is also exactly representable by float64.
 func WalletQuotaFromDecimalStrict(d decimal.Decimal) (int, error) {

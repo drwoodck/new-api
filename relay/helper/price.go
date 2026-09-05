@@ -270,7 +270,15 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 		groupPriceRowChecked = true
 		resolved := model.ResolveTierPriceFromRow(info.OriginModelName, info.UsingGroup, tierInput, row)
 		if resolved.Status == model.TierResolutionResolved {
-			return buildTierPriceData(resolved, groupRatioInfo)
+			priceData, err := buildTierPriceData(resolved, groupRatioInfo)
+			if err != nil {
+				return hosttypes.PriceData{}, err
+			}
+			if materialPrices, ok := model.ResolveMaterialPricesForGroup(
+				info.OriginModelName, info.UsingGroup, groupPricingEnabled, groupPriceRow); ok {
+				priceData.MaterialPrices = materialPrices
+			}
+			return priceData, nil
 		}
 		if resolved.Status == model.TierResolutionUnavailable {
 			return hosttypes.PriceData{}, modelTierPriceNotAvailableError(
@@ -279,7 +287,15 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 	} else {
 		resolved := model.ResolveTierPriceUnified(info.OriginModelName, info.UserGroup, info.UsingGroup, tierInput)
 		if resolved.Status == model.TierResolutionResolved {
-			return buildTierPriceData(resolved, groupRatioInfo)
+			priceData, err := buildTierPriceData(resolved, groupRatioInfo)
+			if err != nil {
+				return hosttypes.PriceData{}, err
+			}
+			if materialPrices, ok := model.ResolveMaterialPricesForGroup(
+				info.OriginModelName, info.UsingGroup, groupPricingEnabled, groupPriceRow); ok {
+				priceData.MaterialPrices = materialPrices
+			}
+			return priceData, nil
 		}
 		if resolved.Status == model.TierResolutionUnavailable {
 			return hosttypes.PriceData{}, modelTierPriceNotAvailableError(
@@ -301,7 +317,15 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 			groupRatioInfo.HasSpecialRatio = false
 			groupRatioInfo.GroupSpecialRatio = -1
 		}
-		return buildVideoSecondPriceData(secondPrice, groupRatioInfo)
+		priceData, err := buildVideoSecondPriceData(secondPrice, groupRatioInfo)
+		if err != nil {
+			return hosttypes.PriceData{}, err
+		}
+		if materialPrices, ok := model.ResolveMaterialPricesForGroup(
+			info.OriginModelName, info.UsingGroup, groupPricingEnabled, groupPriceRow); ok {
+			priceData.MaterialPrices = materialPrices
+		}
+		return priceData, nil
 	}
 
 	var modelPrice float64
@@ -395,6 +419,10 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 		UsePrice:       usePrice,
 		Quota:          quota,
 		GroupRatioInfo: groupRatioInfo,
+	}
+	if materialPrices, ok := model.ResolveMaterialPricesForGroup(
+		info.OriginModelName, info.UsingGroup, groupPricingEnabled, groupPriceRow); ok {
+		priceData.MaterialPrices = materialPrices
 	}
 	return priceData, nil
 }

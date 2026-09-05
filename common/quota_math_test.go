@@ -128,6 +128,15 @@ func TestQuotaFromDecimalChecked(t *testing.T) {
 	}
 }
 
+// TestAddQuotaSaturating guards the additive billing invariant: merging a
+// second legal billing dimension (input material fees) into the total must
+// saturate at the single-request boundary instead of wrapping into a credit.
+func TestAddQuotaSaturating(t *testing.T) {
+	assert.Equal(t, 30, AddQuotaSaturating(10, 20))
+	assert.Equal(t, MaxQuota, AddQuotaSaturating(MaxQuota, 1))
+	assert.Equal(t, MaxQuota, AddQuotaSaturating(MaxQuota, MaxQuota))
+}
+
 func TestWalletQuotaFromDecimalStrict(t *testing.T) {
 	quota, err := WalletQuotaFromDecimalStrict(decimal.NewFromInt(4_294_500_000))
 	require.NoError(t, err)

@@ -138,6 +138,10 @@ type TaskBillingContext struct {
 	TierType     string               `json:"tier_type,omitempty"`     // 档位维度（resolution/request/...）
 	TierKey      string               `json:"tier_key,omitempty"`      // 预扣命中的档位键
 	TierSnapshot *types.PriceTierList `json:"tier_snapshot,omitempty"` // 预扣时的完整档表快照（原价）
+	// 素材计费快照：提交时定稿的清单与额度。素材费是固定项冻结，轮询结算只
+	// 做探测修正（RefreshMaterialDurationsAtSettle），不做重新定价。
+	MaterialQuota int                           `json:"material_quota,omitempty"`
+	Materials     []types.ResolvedInputMaterial `json:"materials,omitempty"`
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）

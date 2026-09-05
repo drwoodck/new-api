@@ -28,6 +28,14 @@ type PriceData struct {
 	// VideoSecondPrice 视频按秒计费的每秒单价（美元/秒）。大于 0 表示该请求
 	// 走按秒计费，任务完成时需按上游返回的实际时长差额结算。
 	VideoSecondPrice float64
+	// 素材计费（加法维度，不进 OtherRatios 乘法体系）：
+	// MaterialPrices 本次请求生效的素材价表（原价，未乘分组倍率；分别定价模式
+	// 即行内表，统一模式即全局表）。
+	MaterialPrices InputMaterialPriceList
+	// Materials 提交时定稿的素材计费快照（含每条时长与来源）。
+	Materials []ResolvedInputMaterial
+	// MaterialQuota 素材费额度（已乘分组倍率）。预扣与结算均在此之上做加法。
+	MaterialQuota int
 	// TierBilling 表示本次请求走档位计费（PriceTier 命中）。档表模型下
 	// VideoSecondPrice/ModelPrice 承载的是命中档的单价，配合以下字段在
 	// 结算阶段按实际档位差额结算。
@@ -40,12 +48,12 @@ type PriceData struct {
 	TierBillingUnit string
 	// TierSnapshot 预扣时的完整档表快照 —— 结算重选档的权威依据，防止
 	// 提交与完成之间管理员改价/删档影响在途任务。
-	TierSnapshot     *PriceTierList
-	otherRatios      map[string]float64
-	UsePrice         bool
-	Quota            int // 按次计费的最终额度（MJ / Task）
+	TierSnapshot      *PriceTierList
+	otherRatios       map[string]float64
+	UsePrice          bool
+	Quota             int // 按次计费的最终额度（MJ / Task）
 	QuotaToPreConsume int // 按量计费的预消耗额度
-	GroupRatioInfo   GroupRatioInfo
+	GroupRatioInfo    GroupRatioInfo
 }
 
 func (p *PriceData) AddOtherRatio(key string, ratio float64) {

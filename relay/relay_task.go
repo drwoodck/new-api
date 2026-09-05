@@ -210,6 +210,21 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	}
 
+	// 5.7 输入素材计费：素材费是加法维度，不进 OtherRatios。素材价已由
+	//     ModelPriceHelperPerCall 解析到 PriceData.MaterialPrices；此处定稿素材
+	//     清单（时长探测）并算出素材费。素材视频价配置生效时剔除豆包 video_input
+	//     倍率——素材费已按条计价，再乘该倍率即双计（与 applyVideoSecondPricing
+	//     覆盖 seconds 同手法；未配置素材价时维持旧行为）。
+	if len(info.PriceData.MaterialPrices) > 0 {
+		explicitSeconds := func(material hosttypes.ResolvedInputMaterial) int {
+			if material.MaterialType != hosttypes.MaterialTypeVideo {
+				return 0
+			}
+			return relaycommon.ResolveTaskExplicitDuration(c)
+		}
+		applyMaterialBilling(c, info, explicitSeconds)
+	}
+
 	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
 	//    按秒计费是管理员显式配置，优先级高于 TaskPricePatches 环境变量。
 	//    按次档位计费（request 档）是固定价：适配器恒注入的 seconds/size 等
@@ -226,7 +241,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
 	if info.Billing == nil && !info.PriceData.FreeModel {
 		info.ForcePreConsume = true
-		if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
+		if apiErr := service.PreConsumeBilling(c, common.AddQuotaSaturating(info.PriceData.Quota, info.PriceData.MaterialQuota), info); apiErr != nil {
 			return nil, service.TaskErrorFromAPIError(apiErr)
 		}
 	}
@@ -270,7 +285,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 			UpstreamTaskID: upstreamTaskID,
 			TaskData:       taskData,
 			Platform:       platform,
-			Quota:          finalQuota,
+			Quota:          common.AddQuotaSaturating(finalQuota, info.PriceData.MaterialQuota),
 		}, nil
 	}
 	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
@@ -301,8 +316,32 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		UpstreamTaskID: upstreamTaskID,
 		TaskData:       taskData,
 		Platform:       platform,
-		Quota:          finalQuota,
+		Quota:          common.AddQuotaSaturating(finalQuota, info.PriceData.MaterialQuota),
 	}, nil
+}
+
+// applyMaterialBilling 定稿输入素材清单并把素材费写进 PriceData，是素材计费
+// 在任务提交链路的落点。素材费是加法维度：预扣与最终额度在生成费之上叠加
+// PriceData.MaterialQuota，不进 OtherRatios 乘法体系；素材视频价生效时剔除
+// 豆包 video_input 倍率——素材已按条计价，再乘该倍率即双计。返回素材费额度。
+func applyMaterialBilling(c *gin.Context, info *relaycommon.RelayInfo, explicitSeconds func(material hosttypes.ResolvedInputMaterial) int) int {
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return 0
+	}
+	for _, p := range info.PriceData.MaterialPrices {
+		if p.MaterialType == hosttypes.MaterialTypeVideo {
+			info.PriceData.RemoveOtherRatio("video_input")
+			break
+		}
+	}
+	materials := relaycommon.DetectInputMaterials(req)
+	resolved, materialQuota, clamp := service.ResolveInputMaterials(
+		c, materials, info.PriceData.MaterialPrices, info.PriceData.GroupRatioInfo.GroupRatio, explicitSeconds)
+	info.PriceData.Materials = resolved
+	info.PriceData.MaterialQuota = materialQuota
+	noteTaskQuotaClamp(info, clamp)
+	return materialQuota
 }
 
 // taskIsTierRequestBilling 判断任务是否为"按次档位计费"（request 档）。

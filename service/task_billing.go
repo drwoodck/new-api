@@ -36,10 +36,17 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 			}
 		}
 	}
+	if len(info.PriceData.Materials) > 0 {
+		logContent = fmt.Sprintf("%s, 素材 %d 项", logContent, len(info.PriceData.Materials))
+	}
 	other := make(map[string]interface{})
 	other["is_task"] = true
 	other["request_path"] = c.Request.URL.Path
 	other["model_price"] = info.PriceData.ModelPrice
+	if len(info.PriceData.Materials) > 0 {
+		other["input_materials"] = info.PriceData.Materials
+		other["material_quota"] = info.PriceData.MaterialQuota
+	}
 	if info.PriceData.ModelRatio > 0 {
 		other["model_ratio"] = info.PriceData.ModelRatio
 	}
