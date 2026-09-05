@@ -104,6 +104,18 @@ function createJsonStringField(
   })
 }
 
+// 素材默认秒数以字符串形态进出表单(与相邻价格字段一致),提交时整体校验为
+// 非负整数字符串 —— 后端按 strconv.Atoi 解析,空串/小数会被静默忽略。
+const createNonNegativeIntegerField = (t: Translate) =>
+  z.string().superRefine((value, ctx) => {
+    if (!/^\d+$/.test(value.trim())) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: t('Enter a non-negative integer'),
+      })
+    }
+  })
+
 const createModelSchema = (t: Translate) =>
   z.object({
     ModelPrice: createJsonStringField(t),
@@ -114,6 +126,9 @@ const createModelSchema = (t: Translate) =>
     ImageRatio: createJsonStringField(t),
     VideoSecondPrice: createJsonStringField(t),
     VideoPriceTiers: createJsonStringField(t),
+    InputMaterialPrices: createJsonStringField(t),
+    MaterialDefaultVideoSeconds: createNonNegativeIntegerField(t),
+    MaterialDefaultAudioSeconds: createNonNegativeIntegerField(t),
     AudioRatio: createJsonStringField(t),
     AudioCompletionRatio: createJsonStringField(t),
     ExposeRatioEnabled: z.boolean(),
@@ -192,6 +207,9 @@ export function RatioSettingsCard({
     ImageRatio: normalizeJsonString(modelDefaults.ImageRatio),
     VideoSecondPrice: normalizeJsonString(modelDefaults.VideoSecondPrice),
     VideoPriceTiers: normalizeJsonString(modelDefaults.VideoPriceTiers),
+    InputMaterialPrices: normalizeJsonString(modelDefaults.InputMaterialPrices),
+    MaterialDefaultVideoSeconds: modelDefaults.MaterialDefaultVideoSeconds,
+    MaterialDefaultAudioSeconds: modelDefaults.MaterialDefaultAudioSeconds,
     AudioRatio: normalizeJsonString(modelDefaults.AudioRatio),
     AudioCompletionRatio: normalizeJsonString(
       modelDefaults.AudioCompletionRatio
@@ -232,6 +250,11 @@ export function RatioSettingsCard({
       ImageRatio: formatJsonForTextarea(modelDefaults.ImageRatio),
       VideoSecondPrice: formatJsonForTextarea(modelDefaults.VideoSecondPrice),
       VideoPriceTiers: formatJsonForTextarea(modelDefaults.VideoPriceTiers),
+      InputMaterialPrices: formatJsonForTextarea(
+        modelDefaults.InputMaterialPrices
+      ),
+      MaterialDefaultVideoSeconds: modelDefaults.MaterialDefaultVideoSeconds,
+      MaterialDefaultAudioSeconds: modelDefaults.MaterialDefaultAudioSeconds,
       AudioRatio: formatJsonForTextarea(modelDefaults.AudioRatio),
       AudioCompletionRatio: formatJsonForTextarea(
         modelDefaults.AudioCompletionRatio
@@ -267,6 +290,9 @@ export function RatioSettingsCard({
       ImageRatio: normalizeJsonString(modelDefaults.ImageRatio),
       VideoSecondPrice: normalizeJsonString(modelDefaults.VideoSecondPrice),
       VideoPriceTiers: normalizeJsonString(modelDefaults.VideoPriceTiers),
+      InputMaterialPrices: normalizeJsonString(modelDefaults.InputMaterialPrices),
+      MaterialDefaultVideoSeconds: modelDefaults.MaterialDefaultVideoSeconds,
+      MaterialDefaultAudioSeconds: modelDefaults.MaterialDefaultAudioSeconds,
       AudioRatio: normalizeJsonString(modelDefaults.AudioRatio),
       AudioCompletionRatio: normalizeJsonString(
         modelDefaults.AudioCompletionRatio
@@ -287,6 +313,11 @@ export function RatioSettingsCard({
       ImageRatio: formatJsonForTextarea(modelDefaults.ImageRatio),
       VideoSecondPrice: formatJsonForTextarea(modelDefaults.VideoSecondPrice),
       VideoPriceTiers: formatJsonForTextarea(modelDefaults.VideoPriceTiers),
+      InputMaterialPrices: formatJsonForTextarea(
+        modelDefaults.InputMaterialPrices
+      ),
+      MaterialDefaultVideoSeconds: modelDefaults.MaterialDefaultVideoSeconds,
+      MaterialDefaultAudioSeconds: modelDefaults.MaterialDefaultAudioSeconds,
       AudioRatio: formatJsonForTextarea(modelDefaults.AudioRatio),
       AudioCompletionRatio: formatJsonForTextarea(
         modelDefaults.AudioCompletionRatio
@@ -334,6 +365,9 @@ export function RatioSettingsCard({
         ImageRatio: normalizeJsonString(values.ImageRatio),
         VideoSecondPrice: normalizeJsonString(values.VideoSecondPrice),
         VideoPriceTiers: normalizeJsonString(values.VideoPriceTiers),
+        InputMaterialPrices: normalizeJsonString(values.InputMaterialPrices),
+        MaterialDefaultVideoSeconds: values.MaterialDefaultVideoSeconds.trim(),
+        MaterialDefaultAudioSeconds: values.MaterialDefaultAudioSeconds.trim(),
         AudioRatio: normalizeJsonString(values.AudioRatio),
         AudioCompletionRatio: normalizeJsonString(values.AudioCompletionRatio),
         ExposeRatioEnabled: values.ExposeRatioEnabled,

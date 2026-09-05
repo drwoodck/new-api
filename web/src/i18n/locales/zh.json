@@ -5518,6 +5518,20 @@
     "Video playback failed": "视频播放失败",
     "Video Preview": "视频预览",
     "Video URL": "视频 URL",
-    "View the complete details for this task log entry": "查看此任务日志条目的完整详情"
+    "View the complete details for this task log entry": "查看此任务日志条目的完整详情",
+    "秒价 (USD/秒)": "秒价 (USD/秒)",
+    "素材价": "素材价",
+    "图片 (USD/张)": "图片 (USD/张)",
+    "视频 (USD/秒)": "视频 (USD/秒)",
+    "音频 (USD/秒)": "音频 (USD/秒)",
+    "默认秒数": "默认秒数",
+    "素材价按类型独立配置,留空该类型不计费。": "素材价按类型独立配置,留空该类型不计费。",
+    "Input material pricing": "输入素材计费",
+    "JSON map of model → material price list. Each entry has material_type (image/video/audio), price_per_unit (images) or price_per_second (video/audio) and optional default_seconds. Configured models bill uploaded materials additively on top of generation cost.": "模型 → 素材价表的 JSON 映射。每条包含 material_type(image/video/audio)、price_per_unit(图片)或 price_per_second(视频/音频),以及可选的 default_seconds。已配置的模型对上传素材在生成费用之外累加计费。",
+    "Video default seconds": "视频默认秒数",
+    "Audio default seconds": "音频默认秒数",
+    "Estimated seconds billed when a video material has no explicit or measurable duration. Per-model default_seconds overrides this.": "视频素材没有显式或可测时长时,按该秒数估算计费;模型级 default_seconds 优先于此值。",
+    "Estimated seconds billed when an audio material has no explicit or measurable duration. Per-model default_seconds overrides this.": "音频素材没有显式或可测时长时,按该秒数估算计费;模型级 default_seconds 优先于此值。",
+    "Enter a non-negative integer": "请输入非负整数"
   }
 }

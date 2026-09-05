@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { Code2, Eye, RotateCcw, Save } from 'lucide-react'
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, memo, useCallback, useEffect, useRef, useState } from 'react'
 import type { UseFormReturn } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -34,6 +34,7 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
+import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { getEnabledModels } from '@/features/channels/api'
 
@@ -56,6 +57,9 @@ type ModelFormValues = {
   ImageRatio: string
   VideoSecondPrice: string
   VideoPriceTiers: string
+  InputMaterialPrices: string
+  MaterialDefaultVideoSeconds: string
+  MaterialDefaultAudioSeconds: string
   AudioRatio: string
   AudioCompletionRatio: string
   ExposeRatioEnabled: boolean
@@ -82,6 +86,7 @@ type ModelJsonFieldName =
   | 'ImageRatio'
   | 'VideoSecondPrice'
   | 'VideoPriceTiers'
+  | 'InputMaterialPrices'
   | 'AudioRatio'
   | 'AudioCompletionRatio'
 
@@ -134,6 +139,12 @@ const modelJsonFields: Array<{
     labelKey: 'Video tier pricing',
     descriptionKey:
       'JSON map of video model → tier table. Each tier has tier_type (request/resolution/image_size/mode), key, billing_unit (second/request) and price. Configured models are billed by the matched tier.',
+  },
+  {
+    name: 'InputMaterialPrices',
+    labelKey: 'Input material pricing',
+    descriptionKey:
+      'JSON map of model → material price list. Each entry has material_type (image/video/audio), price_per_unit (images) or price_per_second (video/audio) and optional default_seconds. Configured models bill uploaded materials additively on top of generation cost.',
   },
   {
     name: 'AudioRatio',
@@ -354,13 +365,68 @@ export const ModelRatioForm = memo(function ModelRatioForm({
           <SettingsForm onSubmit={form.handleSubmit(onSave)}>
             <div className='grid min-w-0 gap-x-5 gap-y-8 lg:grid-cols-2 2xl:grid-cols-3'>
               {modelJsonFields.map((config) => (
-                <ModelJsonTextareaField
-                  key={config.name}
-                  form={form}
-                  name={config.name}
-                  label={t(config.labelKey)}
-                  description={t(config.descriptionKey)}
-                />
+                <Fragment key={config.name}>
+                  <ModelJsonTextareaField
+                    form={form}
+                    name={config.name}
+                    label={t(config.labelKey)}
+                    description={t(config.descriptionKey)}
+                  />
+                  {config.name === 'InputMaterialPrices' && (
+                    <div className='grid gap-x-5 gap-y-8 sm:grid-cols-2'>
+                      <FormField
+                        control={form.control}
+                        name='MaterialDefaultVideoSeconds'
+                        render={({ field }) => (
+                          <FormItem className='flex min-w-0 flex-col gap-2'>
+                            <FormLabel>
+                              {t('Video default seconds')}
+                            </FormLabel>
+                            <FormControl>
+                              <Input
+                                type='number'
+                                min={0}
+                                step={1}
+                                {...field}
+                              />
+                            </FormControl>
+                            <FormDescription className='text-xs leading-5'>
+                              {t(
+                                'Estimated seconds billed when a video material has no explicit or measurable duration. Per-model default_seconds overrides this.'
+                              )}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name='MaterialDefaultAudioSeconds'
+                        render={({ field }) => (
+                          <FormItem className='flex min-w-0 flex-col gap-2'>
+                            <FormLabel>
+                              {t('Audio default seconds')}
+                            </FormLabel>
+                            <FormControl>
+                              <Input
+                                type='number'
+                                min={0}
+                                step={1}
+                                {...field}
+                              />
+                            </FormControl>
+                            <FormDescription className='text-xs leading-5'>
+                              {t(
+                                'Estimated seconds billed when an audio material has no explicit or measurable duration. Per-model default_seconds overrides this.'
+                              )}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                  )}
+                </Fragment>
               ))}
             </div>
 

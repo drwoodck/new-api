@@ -5518,6 +5518,20 @@
     "Video playback failed": "Video playback failed",
     "Video Preview": "Video Preview",
     "Video URL": "Video URL",
-    "View the complete details for this task log entry": "View the complete details for this task log entry"
+    "View the complete details for this task log entry": "View the complete details for this task log entry",
+    "秒价 (USD/秒)": "Second price (USD/s)",
+    "素材价": "Material prices",
+    "图片 (USD/张)": "Image (USD/image)",
+    "视频 (USD/秒)": "Video (USD/second)",
+    "音频 (USD/秒)": "Audio (USD/second)",
+    "默认秒数": "Default seconds",
+    "素材价按类型独立配置,留空该类型不计费。": "Material prices are configured per type. Leave a type blank to skip billing it.",
+    "Input material pricing": "Input material pricing",
+    "JSON map of model → material price list. Each entry has material_type (image/video/audio), price_per_unit (images) or price_per_second (video/audio) and optional default_seconds. Configured models bill uploaded materials additively on top of generation cost.": "JSON map of model → material price list. Each entry has material_type (image/video/audio), price_per_unit (images) or price_per_second (video/audio) and optional default_seconds. Configured models bill uploaded materials additively on top of generation cost.",
+    "Video default seconds": "Video default seconds",
+    "Audio default seconds": "Audio default seconds",
+    "Estimated seconds billed when a video material has no explicit or measurable duration. Per-model default_seconds overrides this.": "Estimated seconds billed when a video material has no explicit or measurable duration. Per-model default_seconds overrides this.",
+    "Estimated seconds billed when an audio material has no explicit or measurable duration. Per-model default_seconds overrides this.": "Estimated seconds billed when an audio material has no explicit or measurable duration. Per-model default_seconds overrides this.",
+    "Enter a non-negative integer": "Enter a non-negative integer"
   }
 }

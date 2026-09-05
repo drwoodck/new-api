@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+/* eslint-disable react-refresh/only-export-components */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, Loader2 } from 'lucide-react'
@@ -84,7 +85,12 @@ import { safeJsonParse } from '@/features/system-settings/utils/json-parser'
 import { createModel, updateModel, getModel, getVendors } from '../../api'
 import { getNameRuleOptions, ENDPOINT_TEMPLATES } from '../../constants'
 import { modelsQueryKeys, vendorsQueryKeys, parseModelTags } from '../../lib'
-import type { Model, ModelGroupPrice, PriceTierList } from '../../types'
+import type {
+  InputMaterialPrice,
+  Model,
+  ModelGroupPrice,
+  PriceTierList,
+} from '../../types'
 import { TierPriceEditor } from '@/features/system-settings/models/tier-price-editor'
 
 // Only exact-match rows can carry per-group prices — a prefix/suffix/contains
@@ -103,6 +109,10 @@ type GroupPriceRow = {
   priceTiers: PriceTierList | null
   // 档表校验错误（与后端 NormalizePriceTierList 对齐）。非空时阻止保存。
   tierErrors: string[]
+  // 分组独立秒价（USD/秒），空串 = 未配置。
+  videoSecondPrice: string
+  // 分组素材价表；某类型条目存在 ⇔ 该类型已配置价格（留空 = 不计费）。
+  inputMaterialPrices: InputMaterialPrice[]
 }
 
 function emptyGroupPriceRow(groupName: string): GroupPriceRow {
@@ -113,15 +123,43 @@ function emptyGroupPriceRow(groupName: string): GroupPriceRow {
     modelPrice: '',
     priceTiers: null,
     tierErrors: [],
+    videoSecondPrice: '',
+    inputMaterialPrices: [],
   }
 }
+
+// 素材价折叠块内的三个类型行:计价字段按类型固定(图片按张、视频/音频按秒),
+// 视频与音频另有默认秒数(素材无真值时长时用,占位 = 系统默认 20s/60s)。
+const MATERIAL_KINDS = [
+  {
+    type: 'image',
+    priceField: 'price_per_unit',
+    label: '图片 (USD/张)',
+    hasSeconds: false,
+    defaultSecondsPlaceholder: '',
+  },
+  {
+    type: 'video',
+    priceField: 'price_per_second',
+    label: '视频 (USD/秒)',
+    hasSeconds: true,
+    defaultSecondsPlaceholder: '20',
+  },
+  {
+    type: 'audio',
+    priceField: 'price_per_second',
+    label: '音频 (USD/秒)',
+    hasSeconds: true,
+    defaultSecondsPlaceholder: '60',
+  },
+] as const
 
 // group_prices (API/DB shape) -> GroupPriceRow[] (editor state), keyed by the
 // group names the form currently knows about via GroupRatio. A stored row for
 // a group name no longer in that set is dropped from the visible list (its
 // server-side row is left alone unless the whole model is saved with
 // groupPricingEnabled=false, which clears everything for that model).
-function toGroupPriceRows(
+export function toGroupPriceRows(
   stored: ModelGroupPrice[] | undefined,
   groupNames: string[]
 ): GroupPriceRow[] {
@@ -137,24 +175,31 @@ function toGroupPriceRows(
       modelPrice: row.model_price != null ? String(row.model_price) : '',
       priceTiers: row.price_tiers ?? null,
       tierErrors: [],
+      videoSecondPrice:
+        row.video_second_price != null ? String(row.video_second_price) : '',
+      inputMaterialPrices: row.input_material_prices ?? [],
     }
   })
 }
 
-// GroupPriceRow[] -> group_prices (API shape). A row with a price/ratio
-// counts as "configured"; a fully-blank row for a group is omitted, which is
-// exactly "this group is unavailable" per ResolveGroupPrice.
-function fromGroupPriceRows(rows: GroupPriceRow[]): ModelGroupPrice[] {
+// GroupPriceRow[] -> group_prices (API shape). A row with any configured
+// dimension counts as "configured"; a fully-blank row for a group is omitted,
+// which is exactly "this group is unavailable" per ResolveGroupPrice.
+export function fromGroupPriceRows(rows: GroupPriceRow[]): ModelGroupPrice[] {
   const out: ModelGroupPrice[] = []
   for (const row of rows) {
     const hasPrice = row.modelPrice.trim() !== ''
     const hasRatio =
       row.modelRatio.trim() !== '' || row.completionRatio.trim() !== ''
     const hasTiers = (row.priceTiers?.length ?? 0) > 0
-    if (!hasPrice && !hasRatio && !hasTiers) continue
+    const hasSecondPrice = row.videoSecondPrice.trim() !== ''
+    const hasMaterials = row.inputMaterialPrices.length > 0
+    const hasAnyConfig =
+      hasPrice || hasRatio || hasTiers || hasSecondPrice || hasMaterials
+    if (!hasAnyConfig) continue
     const entry: ModelGroupPrice = { group_name: row.groupName }
     // 档位表优先于标量（后端 ResolveTierPrice 的优先级矩阵）——配了档表的
-    // 分组行只携带档表字段。
+    // 分组行不携带标量价格字段。
     if (hasTiers) {
       entry.price_tiers = row.priceTiers
     } else if (hasPrice) {
@@ -169,6 +214,14 @@ function fromGroupPriceRows(rows: GroupPriceRow[]): ModelGroupPrice[] {
       if (row.completionRatio.trim() !== '') {
         entry.completion_ratio = Number.parseFloat(row.completionRatio)
       }
+    }
+    // 秒价与素材价是独立维度（档表/标量管生成费，秒价/素材价管秒与素材），
+    // 与档表共存写出，不沿用档表与标量的互斥语义。
+    if (hasSecondPrice) {
+      entry.video_second_price = Number.parseFloat(row.videoSecondPrice)
+    }
+    if (hasMaterials) {
+      entry.input_material_prices = row.inputMaterialPrices
     }
     out.push(entry)
   }
@@ -406,6 +459,9 @@ export function ModelMutateDrawer({
       ImageRatio: '',
       VideoSecondPrice: '',
       VideoPriceTiers: '{}',
+      InputMaterialPrices: '{}',
+      MaterialDefaultVideoSeconds: '20',
+      MaterialDefaultAudioSeconds: '60',
       AudioRatio: '',
       AudioCompletionRatio: '',
       ExposeRatioEnabled: false,
@@ -1201,18 +1257,20 @@ export function ModelMutateDrawer({
                     </p>
                   ) : (
                     <div className='space-y-2'>
-                      <div className='grid grid-cols-[1fr_1fr_1fr_1fr] gap-2 text-xs font-medium text-muted-foreground'>
+                      <div className='grid grid-cols-[1fr_1fr_1fr_1fr_1fr_auto] gap-2 text-xs font-medium text-muted-foreground'>
                         <span>{t('分组')}</span>
                         <span>{t('按次价格 (USD)')}</span>
                         <span>{t('Model ratio')}</span>
                         <span>{t('Completion ratio')}</span>
+                        <span>{t('秒价 (USD/秒)')}</span>
+                        <span />
                       </div>
                       {groupPriceRows.map((row) => (
                         <Collapsible
                           key={row.groupName}
                           className='space-y-2 rounded-md border p-2'
                         >
-                          <div className='grid grid-cols-[1fr_1fr_1fr_1fr_auto] items-center gap-2'>
+                          <div className='grid grid-cols-[1fr_1fr_1fr_1fr_1fr_auto] items-center gap-2'>
                             <span className='text-sm font-medium'>
                               {row.groupName}
                             </span>
@@ -1266,6 +1324,22 @@ export function ModelMutateDrawer({
                               )
                             }}
                           />
+                          <Input
+                            type='text'
+                            placeholder='0.10'
+                            value={row.videoSecondPrice}
+                            onChange={(e) => {
+                              const value = e.target.value
+                              if (!validateNumber(value)) return
+                              setGroupPriceRows((prev) =>
+                                prev.map((r) =>
+                                  r.groupName === row.groupName
+                                    ? { ...r, videoSecondPrice: value }
+                                    : r
+                                )
+                              )
+                            }}
+                          />
                             <CollapsibleTrigger className='inline-flex items-center justify-center rounded-md border px-2 py-1 text-xs font-medium'>
                               <ChevronDown className='mr-1 h-4 w-4' />
                               {t('档位表')}
@@ -1301,6 +1375,169 @@ export function ModelMutateDrawer({
                               }
                             />
                           </CollapsibleContent>
+                          <Collapsible className='space-y-2'>
+                            <CollapsibleTrigger className='inline-flex items-center justify-center rounded-md border px-2 py-1 text-xs font-medium'>
+                              <ChevronDown className='mr-1 h-4 w-4' />
+                              {t('素材价')}
+                              {row.inputMaterialPrices.length > 0
+                                ? ` ×${row.inputMaterialPrices.length}`
+                                : ''}
+                            </CollapsibleTrigger>
+                            <CollapsibleContent className='space-y-2'>
+                              <p className='text-muted-foreground text-xs'>
+                                {t('素材价按类型独立配置,留空该类型不计费。')}
+                              </p>
+                              {MATERIAL_KINDS.map((kind) => {
+                                const entry = row.inputMaterialPrices.find(
+                                  (m) => m.material_type === kind.type
+                                )
+                                return (
+                                  <div
+                                    key={kind.type}
+                                    className='flex items-center gap-2'
+                                  >
+                                    <span className='w-28 shrink-0 text-xs'>
+                                      {t(kind.label)}
+                                    </span>
+                                    <Input
+                                      type='text'
+                                      placeholder='0'
+                                      value={
+                                        entry?.[kind.priceField] != null
+                                          ? String(entry[kind.priceField])
+                                          : ''
+                                      }
+                                      onChange={(e) => {
+                                        const value = e.target.value
+                                        if (!validateNumber(value)) return
+                                        setGroupPriceRows((prev) =>
+                                          prev.map((r) => {
+                                            if (r.groupName !== row.groupName) {
+                                              return r
+                                            }
+                                            const others =
+                                              r.inputMaterialPrices.filter(
+                                                (m) =>
+                                                  m.material_type !== kind.type
+                                              )
+                                            // 清空价格 = 该类型不计费:整条移除
+                                            // (条目存在即计费,0 是显式免费)。
+                                            if (value.trim() === '') {
+                                              return {
+                                                ...r,
+                                                inputMaterialPrices: others,
+                                              }
+                                            }
+                                            const previous =
+                                              r.inputMaterialPrices.find(
+                                                (m) =>
+                                                  m.material_type === kind.type
+                                              )
+                                            const base: InputMaterialPrice =
+                                              previous ?? {
+                                                material_type: kind.type,
+                                              }
+                                            const next: InputMaterialPrice =
+                                              kind.type === 'image'
+                                                ? {
+                                                    ...base,
+                                                    price_per_unit:
+                                                      Number.parseFloat(value),
+                                                  }
+                                                : {
+                                                    ...base,
+                                                    price_per_second:
+                                                      Number.parseFloat(value),
+                                                  }
+                                            return {
+                                              ...r,
+                                              inputMaterialPrices: [
+                                                ...others,
+                                                next,
+                                              ],
+                                            }
+                                          })
+                                        )
+                                      }}
+                                    />
+                                    {kind.hasSeconds && (
+                                      <>
+                                        <span className='shrink-0 text-xs text-muted-foreground'>
+                                          {t('默认秒数')}
+                                        </span>
+                                        <Input
+                                          type='text'
+                                          placeholder={
+                                            kind.defaultSecondsPlaceholder
+                                          }
+                                          disabled={!entry}
+                                          value={
+                                            entry?.default_seconds != null
+                                              ? String(entry.default_seconds)
+                                              : ''
+                                          }
+                                          onChange={(e) => {
+                                            const value = e.target.value
+                                            if (!validateNumber(value)) return
+                                            // 后端 default_seconds 是整数字段,
+                                            // 小数会直接导致保存被拒。
+                                            if (
+                                              value.trim() !== '' &&
+                                              !Number.isInteger(
+                                                Number.parseFloat(value)
+                                              )
+                                            ) {
+                                              return
+                                            }
+                                            setGroupPriceRows((prev) =>
+                                              prev.map((r) => {
+                                                if (
+                                                  r.groupName !== row.groupName
+                                                ) {
+                                                  return r
+                                                }
+                                                const previous =
+                                                  r.inputMaterialPrices.find(
+                                                    (m) =>
+                                                      m.material_type ===
+                                                      kind.type
+                                                  )
+                                                if (!previous) {
+                                                  return r
+                                                }
+                                                const others =
+                                                  r.inputMaterialPrices.filter(
+                                                    (m) =>
+                                                      m.material_type !==
+                                                      kind.type
+                                                  )
+                                                const next: InputMaterialPrice =
+                                                  { ...previous }
+                                                if (value.trim() === '') {
+                                                  // 缺省 = 用系统默认秒数。
+                                                  delete next.default_seconds
+                                                } else {
+                                                  next.default_seconds =
+                                                    Number.parseFloat(value)
+                                                }
+                                                return {
+                                                  ...r,
+                                                  inputMaterialPrices: [
+                                                    ...others,
+                                                    next,
+                                                  ],
+                                                }
+                                              })
+                                            )
+                                          }}
+                                        />
+                                      </>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </CollapsibleContent>
+                          </Collapsible>
                         </Collapsible>
                       ))}
                       <p className='text-muted-foreground text-xs'>

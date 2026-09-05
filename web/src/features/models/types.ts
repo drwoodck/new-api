@@ -43,6 +43,10 @@ export interface ModelGroupPrice {
   model_price?: number | null
   /** 档位表：非空时该分组的计费以档位为准（每档可独立选 second/request）。 */
   price_tiers?: PriceTierList | null
+  /** 该分组独立秒价(USD/秒)。null = 未配置(该分组不启用按秒计费)。 */
+  video_second_price?: number | null
+  /** 该分组输入素材价表。null = 未配置(该分组不做素材计费)。 */
+  input_material_prices?: InputMaterialPrice[] | null
 }
 
 // ============================================================================
@@ -70,6 +74,16 @@ export interface PriceTier {
 }
 
 export type PriceTierList = PriceTier[]
+
+/**
+ * 输入素材单价,对齐 Go types.InputMaterialPrice。
+ */
+export interface InputMaterialPrice {
+  material_type: 'image' | 'video' | 'audio'
+  price_per_unit?: number
+  price_per_second?: number
+  default_seconds?: number
+}
 
 /**
  * Model entity from API
