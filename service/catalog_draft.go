@@ -109,6 +109,9 @@ func DraftCatalogEntries(channel *model.Channel, addedModels []string) (drafted 
 // 至少一行(已存在的模型返回 false)。
 func draftCatalogEntryForModel(name, capability, contract string) (created bool, err error) {
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		// 两行同一事务内创建,时间戳取同一次值(其它创建路径均显式设时间戳,
+		// 见 CanvasCatalogModel.Insert / Model.Insert,管理端按此显示创建时间)。
+		now := common.GetTimestamp()
 		var canvasCnt int64
 		if err := tx.Unscoped().Model(&model.CanvasCatalogModel{}).
 			Where("remote_id = ?", name).Count(&canvasCnt).Error; err != nil {
@@ -127,6 +130,8 @@ func draftCatalogEntryForModel(name, capability, contract string) (created bool,
 				Capabilities: capability,
 				Enabled:      &disabled,
 				Contract:     contract,
+				CreatedTime:  now,
+				UpdatedTime:  now,
 			}
 			if err := tx.Create(entry).Error; err != nil {
 				return err
@@ -138,6 +143,8 @@ func draftCatalogEntryForModel(name, capability, contract string) (created bool,
 				ModelName:    name,
 				Status:       0,
 				SyncOfficial: 1,
+				CreatedTime:  now,
+				UpdatedTime:  now,
 			}
 			if err := tx.Create(meta).Error; err != nil {
 				return err

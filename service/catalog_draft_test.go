@@ -49,11 +49,15 @@ func TestDraftCatalogCreatesEntryAndMetaRow(t *testing.T) {
 	assert.Equal(t, "relay_video_async_v1", entry.Contract)
 	require.NotNil(t, entry.Enabled)
 	assert.False(t, *entry.Enabled, "起草条目必须 enabled=false")
+	assert.Greater(t, entry.CreatedTime, int64(0), "起草条目必须写 created_time")
+	assert.Equal(t, entry.CreatedTime, entry.UpdatedTime)
 
 	var meta model.Model
 	require.NoError(t, model.DB.Where("model_name = ?", "draft-sora-model").First(&meta).Error)
 	assert.Equal(t, 0, meta.Status, "起草 meta 行必须 status=0")
 	assert.Equal(t, 1, meta.SyncOfficial)
+	assert.Greater(t, meta.CreatedTime, int64(0), "起草 meta 行必须写 created_time")
+	assert.Equal(t, meta.CreatedTime, meta.UpdatedTime)
 }
 
 // TestDraftCatalogIdempotent 钉住幂等:再次调用 drafted==0,条目/行不重复。
