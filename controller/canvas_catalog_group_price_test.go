@@ -97,6 +97,40 @@ func TestGetCanvasCatalogUnifiedModeGroupPriceIsGlobalTimesGroupRatio(t *testing
 	assert.Equal(t, 0.5, m.GroupPrice.GroupRatioApplied)
 }
 
+// TestGetCanvasCatalogUnifiedModeSecondPriceIsFinalGroupScaledPrice 统一模式秒价
+// 口径修复(2026-09-04 spec 3.3):目录下发**已乘分组倍率的终价**,与档表/按次
+// 同口径 —— 旧版下发原价 + 分离倍率,固定 ratio=1 的客户端会按原价估算而低估
+// (全局 0.1 × vip 3.0 实收 0.3,客户端却按 0.1 估)。ModelPrice 与
+// VideoSecondPrice 都指向终价 0.3,客户端直接拿来用,不再叠乘 GroupRatioApplied。
+func TestGetCanvasCatalogUnifiedModeSecondPriceIsFinalGroupScaledPrice(t *testing.T) {
+	router := setupCatalogGroupPriceTestDB(t, "vip")
+
+	savedVideoPrice := ratio_setting.VideoSecondPrice2JSONString()
+	savedGroupRatio := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateVideoSecondPriceByJSONString(savedVideoPrice))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroupRatio))
+	})
+	require.NoError(t, ratio_setting.UpdateVideoSecondPriceByJSONString(`{"unified-second-catalog":0.1}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"vip":3}`))
+
+	model.DB.Create(&model.CanvasCatalogModel{
+		RemoteID: "unified-second-catalog", DisplayName: "Unified Second", Capabilities: "video_gen",
+		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1,
+	})
+	model.DB.Create(&model.Ability{Group: "vip", Model: "unified-second-catalog", ChannelId: 1, Enabled: true})
+
+	resp := fetchCanvasCatalog(t, router)
+	require.Len(t, resp.Models, 1)
+	price := resp.Models[0].GroupPrice
+	require.NotNil(t, price)
+	require.NotNil(t, price.VideoSecondPrice)
+	assert.InDelta(t, 0.3, price.ModelPrice, 1e-9, "终价口径:全局秒价 0.1 × vip 倍率 3.0 = 0.3")
+	assert.InDelta(t, 0.3, *price.VideoSecondPrice, 1e-9, "VideoSecondPrice 必须指向终价 0.3,不再是原价 0.1")
+	assert.Equal(t, float64(3), price.GroupRatioApplied, "倍率仍单独上报(供客户端追溯最终价如何得出)")
+	assert.Equal(t, 1, price.QuotaType)
+}
+
 // TestGetCanvasCatalogSeparateModeOnlyReturnsCallersOwnGroupPrice 分别定价模式下,
 // 只下发调用者自己分组的那一个价格,不泄露其它分组的价格。
 func TestGetCanvasCatalogSeparateModeOnlyReturnsCallersOwnGroupPrice(t *testing.T) {

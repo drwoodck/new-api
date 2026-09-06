@@ -169,14 +169,16 @@ func resolveCanvasGroupPrice(remoteID, group string, groupPrices map[string]mode
 			GroupRatioApplied: resolved.GroupRatioApplied,
 		}
 	}
-	// 统一模式的视频按秒计费:按秒计费的价格对所有分组都一样,不经过
-	// ResolveGroupPrice(倍率按分组叠乘,与计费侧 groupRatioInfo 同口径)。
+	// 统一模式的视频按秒计费。口径修复(2026-09-04 spec 3.3):与档表/按次
+	// 同口径,下发**已乘分组倍率的终价**——旧版下发原价+分离倍率,固定
+	// ratio=1 的客户端会低估(0.1×3 分组实收 0.3,客户端按 0.1 估算)。
 	if secondPrice, ok := ratio_setting.GetVideoSecondPrice(remoteID); ok {
 		groupRatio := ratio_setting.GetGroupRatio(group)
+		finalPrice := secondPrice * groupRatio
 		return &canvasGroupPrice{
 			QuotaType:         1,
-			ModelPrice:        secondPrice,
-			VideoSecondPrice:  &secondPrice,
+			ModelPrice:        finalPrice,
+			VideoSecondPrice:  &finalPrice,
 			GroupRatioApplied: groupRatio,
 		}
 	}
