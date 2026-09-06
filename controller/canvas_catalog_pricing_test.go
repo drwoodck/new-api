@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -116,6 +117,14 @@ func TestCanvasCatalogPricingUnpricedModel(t *testing.T) {
 	m := &model.Model{ModelName: "pricing-none", Status: 1, GroupPricingEnabled: true}
 	require.NoError(t, m.Insert())
 	model.RefreshPricing()
+	// RefreshPricing() 会从本测试的内存库重建包级定价缓存(modelGroupPricingEnabled
+	// 等),把 pricing-none 的分别定价开关写进全局 —— 不清掉会残留到后续用例。
+	// cleanup 里先删行再重建,还原为中性态(与 restoreCatalogPricingRatioSettings
+	// 的「测试结束恢复全局状态」同一模式)。
+	t.Cleanup(func() {
+		require.NoError(t, model.DB.Where("model_name = ?", "pricing-none").Delete(&model.Model{}).Error)
+		model.RefreshPricing()
+	})
 	require.NoError(t, model.DB.Create(&model.CanvasCatalogModel{
 		RemoteID: "pricing-none", DisplayName: "Unpriced",
 		Contract: "relay_video_async_v1",
@@ -148,4 +157,19 @@ func TestCanvasCatalogPricingGeneratedWithoutGroup(t *testing.T) {
 	require.NotNil(t, m.Pricing, "无分组信息也必须生成 pricing 文案")
 	assert.Equal(t, "$0.02/次", *m.Pricing)
 	assert.Equal(t, "auto", m.PricingSource)
+}
+
+// TestCanvasCatalogPricingSourceOmitempty 锁住 omitempty 契约:pricing_source 只在
+// auto/custom 时下发,空值必须缺席 —— 字段引入前的旧缓存响应不含该键,客户端
+// serde 忽略未知字段,缺席与旧版完全兼容。直接 marshal 一个无定价文案的 wire
+// 模型断言键缺席(自动文案路径恒非空,正常响应必带 auto/custom,空值分支只可能
+// 由旧缓存/极端路径触发)。
+func TestCanvasCatalogPricingSourceOmitempty(t *testing.T) {
+	raw, err := common.Marshal(canvasCatalogWireModel{
+		RemoteID: "no-pricing", DisplayName: "No Pricing",
+		Contract: "relay_video_async_v1",
+		// Pricing 与 PricingSource 均空:omitempty 应让 pricing_source 键缺席
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "pricing_source", "空值必须 omitempty,不能下发空串键")
 }

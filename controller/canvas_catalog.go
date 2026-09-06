@@ -119,17 +119,19 @@ func parseCapabilities(raw string) []string {
 // 本就是同一个字符串,已核实)在给定分组下的价格,供目录下发使用。
 // group 为空表示"没有分组信息"(取不到有效分组),此时 fail-open 返回 nil ——
 // 与 GroupVisible 同一处理原则:宁可不下发价格,也不能下发一个错误的 0。
-func resolveCanvasGroupPrice(remoteID, group string) *canvasGroupPrice {
+// groupPrices 是调用方已按模型预载好的分组价格行(本模型各分组 → 行,可能为空
+// map)——目录下发循环零逐条点查 model_group_prices(见 GetCanvasCatalog)。
+func resolveCanvasGroupPrice(remoteID, group string, groupPrices map[string]model.ModelGroupPrice) *canvasGroupPrice {
 	if group == "" {
 		return nil
 	}
+	groupPricingEnabled := model.IsGroupPricingEnabled(remoteID)
 	// 档位计费最优先：模型配了档表(全局或行内)时下发档表(原价)。
 	// 与 ModelPriceHelperPerCall 的档位分支同序 —— 优先级矩阵见
 	// model/model_group_price.go 的 ResolveTierPrice 注释。
-	if tierTable, err := model.ResolveGroupTierTable(remoteID, group); err != nil {
-		common.SysError(fmt.Sprintf("解析模型 %s 在分组 %s 下的档表失败,本次目录不下发该条目的价格: %v", remoteID, group, err))
-		return nil
-	} else if tierTable != nil {
+	// 用预载行版:分别定价模式只认预载的行内档表,统一模式走全局档表(内存缓存),
+	// 都不再查库。
+	if tierTable := model.ResolveGroupTierTableFromPreloaded(remoteID, group, groupPricingEnabled, groupPrices); tierTable != nil {
 		return &canvasGroupPrice{
 			QuotaType:         1,
 			PriceTiers:        tierTable.PriceTiers,
@@ -141,13 +143,13 @@ func resolveCanvasGroupPrice(remoteID, group string) *canvasGroupPrice {
 	// 不叠乘分组倍率(GroupRatioApplied=1);行内没有秒价列时也不回退全局秒价
 	// (计费侧同样不回退,直接落到行内标量),否则目录会下发一个计费根本
 	// 不会收取的按秒价。
-	if model.IsGroupPricingEnabled(remoteID) {
-		row, err := model.GetModelGroupPrice(remoteID, group)
-		if err != nil {
-			common.SysError(fmt.Sprintf("解析模型 %s 在分组 %s 下的分组价格行失败,本次目录不下发该条目的价格: %v", remoteID, group, err))
+	if groupPricingEnabled {
+		row, ok := groupPrices[group]
+		if !ok {
+			// 该分组没有价格行 = 分组不可用(与计费侧同判),不下发价格。
 			return nil
 		}
-		if secondPrice, ok := model.ResolveVideoSecondPriceForGroup(remoteID, group, true, row); ok {
+		if secondPrice, ok := model.ResolveVideoSecondPriceForGroup(remoteID, group, true, &row); ok {
 			return &canvasGroupPrice{
 				QuotaType:         1,
 				ModelPrice:        secondPrice,
@@ -155,7 +157,7 @@ func resolveCanvasGroupPrice(remoteID, group string) *canvasGroupPrice {
 				GroupRatioApplied: 1,
 			}
 		}
-		resolved := model.ResolveGroupPriceFromRow(row)
+		resolved := model.ResolveGroupPriceFromRow(&row)
 		if !resolved.Available {
 			return nil
 		}
@@ -205,7 +207,9 @@ func resolveCanvasGroupPrice(remoteID, group string) *canvasGroupPrice {
 // GroupPrice —— 与 groupModels 表达的是同一次"有没有分组信息"判断,
 // 两个参数分开传是因为 GroupVisible 只需要集合、GroupPrice 的计算需要
 // 分组名字符串本身。
-func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, group string, metaDescriptions map[string]string) canvasCatalogWireModel {
+// groupPrices 是调用方按模型预载的分组价格行(本模型的 group → 行,nil 表示
+// 该模型没有预载到任何行)——目录下发循环零逐条点查。
+func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, group string, metaDescriptions map[string]string, groupPrices map[string]model.ModelGroupPrice) canvasCatalogWireModel {
 	w := canvasCatalogWireModel{
 		RemoteID:      m.RemoteID,
 		DisplayName:   m.DisplayName,
@@ -215,7 +219,7 @@ func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, g
 		RequiresVocab: m.RequiresVocab,
 		// nil 集合 = 无分组信息 = 不降级任何条目
 		GroupVisible: groupModels == nil,
-		GroupPrice:   resolveCanvasGroupPrice(m.RemoteID, group),
+		GroupPrice:   resolveCanvasGroupPrice(m.RemoteID, group, groupPrices),
 	}
 	if groupModels != nil {
 		_, w.GroupVisible = groupModels[m.RemoteID]
@@ -232,8 +236,14 @@ func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, g
 		w.PricingSource = "custom"
 	} else {
 		// 自动文案(2026-09-04 spec 3.3):与计费同一套解析,管理端未手填时
-		// 由后端生成,保证「目录宣传 = 实际计费」。
-		if summary := model.GeneratePricingSummary(m.RemoteID, group); summary != "" {
+		// 由后端生成,保证「目录宣传 = 实际计费」。走 Preloaded 版,复用
+		// GetCanvasCatalog 预载的分组价格行,循环内零逐条点查。
+		row, ok := groupPrices[group]
+		var rowPtr *model.ModelGroupPrice
+		if ok {
+			rowPtr = &row // map 值是值类型,取本地拷贝的指针,不指向 map 内部
+		}
+		if summary := model.GeneratePricingSummaryPreloaded(m.RemoteID, group, model.IsGroupPricingEnabled(m.RemoteID), rowPtr); summary != "" {
 			w.Pricing = &summary
 			w.PricingSource = "auto"
 		}
@@ -312,6 +322,15 @@ func GetCanvasCatalog(c *gin.Context) {
 		metaDescriptions = map[string]string{}
 	}
 
+	// 预载全部分组价格行(分别定价模式的逐分组价),目录下发循环零逐条点查 ——
+	// 与 metaDescriptions 同一 fail-open 约定:查询失败按空处理(SysError),
+	// 让下游自然回落「无行 = 分组不可用 / 未定价」,不让一次查询故障弄垮整份目录。
+	allGroupPrices, err := model.GetAllModelGroupPrices()
+	if err != nil {
+		common.SysError(fmt.Sprintf("读取分组价格失败,目录价格按未配置处理: %v", err))
+		allGroupPrices = map[string]map[string]model.ModelGroupPrice{}
+	}
+
 	baseURL := os.Getenv("RELAY_BASE_URL")
 	if baseURL == "" {
 		baseURL = "https://your-relay.com"
@@ -319,7 +338,7 @@ func GetCanvasCatalog(c *gin.Context) {
 
 	models := make([]canvasCatalogWireModel, 0, len(rows))
 	for i := range rows {
-		models = append(models, toWireModel(&rows[i], groupModels, effectiveGroup, metaDescriptions))
+		models = append(models, toWireModel(&rows[i], groupModels, effectiveGroup, metaDescriptions, allGroupPrices[rows[i].RemoteID]))
 	}
 
 	response := gin.H{
