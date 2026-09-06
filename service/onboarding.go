@@ -397,6 +397,45 @@ func applyOptionField[V any](name, fieldName, optionKey string, current map[stri
 	return change, nil
 }
 
+// staleKeySpec 描述一条"互斥清理"的删除目标:fieldName 与 optionKey 用于变更记录
+// 与持久化,current 是读回的整表副本。
+type staleKeySpec struct {
+	fieldName string
+	optionKey string
+	current   map[string]float64
+}
+
+// oldStringOrNil 把字符串 option 的旧值转成 FieldChange.Old:未配置返回 nil。
+func oldStringOrNil(old string, existed bool) interface{} {
+	if !existed {
+		return nil
+	}
+	return old
+}
+
+// deleteStaleOptionKeys 从整表副本里删除该模型的键并写回(applyOptionField 的
+// delete 语义)。与手动清空某模型配置的语义一致:键存在 → 删后写回并记 applied
+// (old=被删值,new=nil);键本就不存在 → 不写、不记录。
+func deleteStaleOptionKeys(name string, specs []staleKeySpec, applied *[]FieldChange, skipped *[]FieldSkip) {
+	for _, spec := range specs {
+		old, existed := spec.current[name]
+		if !existed {
+			continue
+		}
+		delete(spec.current, name)
+		data, err := common.Marshal(spec.current)
+		if err != nil {
+			*skipped = append(*skipped, FieldSkip{Field: spec.fieldName, Reason: fmt.Sprintf("marshal %s failed: %v", spec.optionKey, err)})
+			continue
+		}
+		if err := model.UpdateOption(spec.optionKey, string(data)); err != nil {
+			*skipped = append(*skipped, FieldSkip{Field: spec.fieldName, Reason: fmt.Sprintf("persist %s failed: %v", spec.optionKey, err)})
+			continue
+		}
+		*applied = append(*applied, FieldChange{Field: spec.fieldName, Old: old, New: nil})
+	}
+}
+
 // recordFieldResult 把单个字段的写结果按成功/失败分派到 applied / skipped。
 func recordFieldResult(fieldName string, change FieldChange, err error, applied *[]FieldChange, skipped *[]FieldSkip) {
 	if err != nil {
@@ -446,8 +485,10 @@ func ApplyUpstreamEntryToSettings(p *UpstreamModelPricing) (applied []FieldChang
 	applied = make([]FieldChange, 0, 8)
 	skipped = make([]FieldSkip, 0, 4)
 
-	// 倍率/价格块:QuotaType==1 写 ModelPrice;否则写 ModelRatio+CompletionRatio。
-	// 37.5 哨兵条目整体跳过该块(与 ratio_sync 的 confidence 判定一致)。
+	// 倍率/价格块:QuotaType==1 写 ModelPrice 并清掉同模型按量计费的残留键
+	// (ModelRatio/CompletionRatio);否则写 ModelRatio+CompletionRatio 并清掉按次
+	// /按张计费的 ModelPrice 残留。互斥清理保证同一模型不会同时命中两套计费口径。
+	// 37.5 哨兵条目整体跳过该块(不做任何写)。
 	if IsSuspiciousUpstreamEntry(p) {
 		skipped = append(skipped, FieldSkip{
 			Field:  "model_ratio",
@@ -460,6 +501,10 @@ func ApplyUpstreamEntryToSettings(p *UpstreamModelPricing) (applied []FieldChang
 		} else {
 			skipped = append(skipped, FieldSkip{Field: "model_price", Reason: fmt.Sprintf("model_price %v 超出合法区间 [0, %g]", p.ModelPrice, types.MaxTierPrice)})
 		}
+		deleteStaleOptionKeys(name, []staleKeySpec{
+			{"model_ratio", "ModelRatio", ratio_setting.GetModelRatioCopy()},
+			{"completion_ratio", "CompletionRatio", ratio_setting.GetCompletionRatioCopy()},
+		}, &applied, &skipped)
 	} else {
 		if inPriceBound(p.ModelRatio) {
 			change, ferr := applyOptionField(name, "model_ratio", "ModelRatio", ratio_setting.GetModelRatioCopy(), p.ModelRatio)
@@ -473,6 +518,9 @@ func ApplyUpstreamEntryToSettings(p *UpstreamModelPricing) (applied []FieldChang
 		} else {
 			skipped = append(skipped, FieldSkip{Field: "completion_ratio", Reason: fmt.Sprintf("completion_ratio %v 超出合法区间 [0, %g]", p.CompletionRatio, types.MaxTierPrice)})
 		}
+		deleteStaleOptionKeys(name, []staleKeySpec{
+			{"model_price", "ModelPrice", ratio_setting.GetModelPriceCopy()},
+		}, &applied, &skipped)
 	}
 
 	// 各辅助倍率:指针非 nil 才写。
@@ -522,7 +570,10 @@ func ApplyUpstreamEntryToSettings(p *UpstreamModelPricing) (applied []FieldChang
 		}
 	}
 
-	// billing_mode + billing_expr:tiered_expr 且 expr 非空时过编译冒烟后写 billing_setting。
+	// billing_mode + billing_expr:tiered_expr 且 expr 非空时过编译冒烟后写
+	// billing_setting。expr 与 mode 经 UpdateOptionsBulk 单事务/单次内存刷新原子
+	// 落库,杜绝 mode 开而 expr 缺的中间态(expr 缺失时 relay 按 fail-closed 拒
+	// 请求,不是回退)。两者映射进同一份 {模型: 值} 字符串 map,各自整表读改写。
 	if p.BillingMode == billing_setting.BillingModeTieredExpr {
 		expr := strings.TrimSpace(p.BillingExpr)
 		if expr == "" {
@@ -530,10 +581,34 @@ func ApplyUpstreamEntryToSettings(p *UpstreamModelPricing) (applied []FieldChang
 		} else if berr := billing_setting.SmokeTestExpr(expr); berr != nil {
 			skipped = append(skipped, FieldSkip{Field: "billing_expr", Reason: "billing_expr 编译冒烟失败: " + berr.Error()})
 		} else {
-			change, ferr := applyOptionField(name, "billing_mode", "billing_setting.billing_mode", billing_setting.GetBillingModeCopy(), billing_setting.BillingModeTieredExpr)
-			recordFieldResult("billing_mode", change, ferr, &applied, &skipped)
-			change, ferr = applyOptionField(name, "billing_expr", "billing_setting.billing_expr", billing_setting.GetBillingExprCopy(), expr)
-			recordFieldResult("billing_expr", change, ferr, &applied, &skipped)
+			exprOld, exprExisted := billing_setting.GetBillingExpr(name)
+			modeOld, modeExisted := billing_setting.GetBillingModeCopy()[name]
+			// 默认 mode 是 ratio:未显式配置时把旧值展示为 ratio,保证 diff 完整
+			// (仅影响响应里的 old 展示,写入仍是 tiered_expr)。
+			if !modeExisted {
+				modeExisted = true
+				modeOld = billing_setting.BillingModeRatio
+			}
+
+			exprMap := billing_setting.GetBillingExprCopy()
+			exprMap[name] = expr
+			exprJSON, jerr := common.Marshal(exprMap)
+			modeMap := billing_setting.GetBillingModeCopy()
+			modeMap[name] = billing_setting.BillingModeTieredExpr
+			modeJSON, merr := common.Marshal(modeMap)
+			if jerr != nil || merr != nil {
+				skipped = append(skipped, FieldSkip{Field: "billing_mode", Reason: "marshal billing_setting 失败"})
+			} else if uerr := model.UpdateOptionsBulk(map[string]string{
+				"billing_setting.billing_expr": string(exprJSON),
+				"billing_setting.billing_mode": string(modeJSON),
+			}); uerr != nil {
+				skipped = append(skipped, FieldSkip{Field: "billing_mode", Reason: "billing_setting 写入失败: " + uerr.Error()})
+			} else {
+				applied = append(applied,
+					FieldChange{Field: "billing_expr", Old: oldStringOrNil(exprOld, exprExisted), New: expr},
+					FieldChange{Field: "billing_mode", Old: oldStringOrNil(modeOld, modeExisted), New: billing_setting.BillingModeTieredExpr},
+				)
+			}
 		}
 	}
 
@@ -587,6 +662,13 @@ func SyncModelsFromUpstream(ctx context.Context, channelID int, modelNames []str
 		item, ok := entries[name]
 		if !ok {
 			errs = append(errs, SyncUpstreamError{Model: name, Error: "上游未返回该模型条目"})
+			continue
+		}
+		// 准入闸门:Normalize 失败的条目(valid=false)直接记入 errors 跳过,
+		// 不进 ApplyUpstreamEntryToSettings —— 逐字段 per-field 护栏只作为
+		// 纵深防御保留,不在入口处半应用一条已知坏条目。
+		if !item.Valid {
+			errs = append(errs, SyncUpstreamError{Model: name, Error: item.Error})
 			continue
 		}
 		raw := UpstreamModelPricing{

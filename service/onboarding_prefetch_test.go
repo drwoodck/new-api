@@ -361,6 +361,59 @@ func TestApplyUpstreamEntryQuotaTypePrice(t *testing.T) {
 	assert.False(t, okRatio, "quota_type==1 不得写倍率 map")
 }
 
+// TestApplyUpstreamEntryQuotaTypeMutualExclusion 钉住互斥清理:
+//   - quota_type=0(按量)条目:ModelPrice 里该模型的残留键被删除 → apply 后
+//     GetModelPrice 不命中、GetModelRatio 命中;
+//   - quota_type=1(按次/张)条目:ModelRatio/CompletionRatio 残留键被删除 →
+//     apply 后 GetModelRatio 不命中、GetModelPrice 命中。
+func TestApplyUpstreamEntryQuotaTypeMutualExclusion(t *testing.T) {
+	setupOnboardingPrefetchTest(t)
+
+	// 先造"脏状态":同一模型同时有按次价与按量倍率(跨 quota_type 同步前的历史残留)。
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"sync-mutex-model":0.25}`))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"sync-mutex-model":1.5}`))
+
+	// quota_type=0 条目按量计费:清掉 ModelPrice 残留,写入 ModelRatio。
+	ratioEntry := UpstreamModelPricing{
+		ModelName:       "sync-mutex-model",
+		QuotaType:       0,
+		ModelRatio:      1.5,
+		CompletionRatio: 2.0,
+		Description:     "mutex ratio desc",
+	}
+	applied, skipped, err := ApplyUpstreamEntryToSettings(&ratioEntry)
+	require.NoError(t, err)
+	require.Empty(t, skipped)
+	assert.ElementsMatch(t, []string{"model_ratio", "completion_ratio", "model_price", "description"}, appliedFields(applied))
+
+	_, okPrice := ratio_setting.GetModelPrice("sync-mutex-model", false)
+	assert.False(t, okPrice, "quota_type=0 应用后 ModelPrice 残留键必须删除")
+	ratio, okRatio, _ := ratio_setting.GetModelRatio("sync-mutex-model")
+	assert.True(t, okRatio)
+	assert.InDelta(t, 1.5, ratio, 1e-9)
+
+	// 反方向:quota_type=1 条目按次计费:清掉 ModelRatio/CompletionRatio 残留。
+	priceEntry := UpstreamModelPricing{
+		ModelName:   "sync-mutex-model",
+		QuotaType:   1,
+		ModelPrice:  0.25,
+		Description: "mutex price desc",
+	}
+	applied, skipped, err = ApplyUpstreamEntryToSettings(&priceEntry)
+	require.NoError(t, err)
+	require.Empty(t, skipped)
+	assert.ElementsMatch(t, []string{"model_price", "model_ratio", "completion_ratio", "description"}, appliedFields(applied))
+
+	price, okPrice := ratio_setting.GetModelPrice("sync-mutex-model", false)
+	assert.True(t, okPrice)
+	assert.InDelta(t, 0.25, price, 1e-9)
+	_, okRatio, _ = ratio_setting.GetModelRatio("sync-mutex-model")
+	assert.False(t, okRatio, "quota_type=1 应用后 ModelRatio 残留键必须删除")
+	ratioCopy := ratio_setting.GetCompletionRatioCopy()
+	_, stillThere := ratioCopy["sync-mutex-model"]
+	assert.False(t, stillThere, "quota_type=1 应用后 CompletionRatio 残留键必须删除")
+}
+
 // TestApplyUpstreamEntrySkipsInvalidTierTable 钉住逐字段独立:非法档表 skip,
 // 同条目其它字段(model_ratio/completion_ratio/description)仍应用。
 func TestApplyUpstreamEntrySkipsInvalidTierTable(t *testing.T) {
@@ -477,4 +530,33 @@ func TestSyncFromUpstreamEndToEnd(t *testing.T) {
 	assert.True(t, sentRes.Suspicious)
 	assert.ElementsMatch(t, []string{"description"}, appliedFields(sentRes.Applied))
 	assert.Contains(t, skippedFields(sentRes.Skipped), "model_ratio")
+}
+
+// TestSyncFromUpstreamSkipsInvalidNormalized 钉住准入闸门:Normalize 失败的条目
+// (valid=false)直接进 sync 响应的 errors,不进 Apply,零写入。per-field 护栏只作
+// 纵深防御,入口处不半应用已知坏条目。
+func TestSyncFromUpstreamSkipsInvalidNormalized(t *testing.T) {
+	db := setupOnboardingPrefetchTest(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success": true, "data": [
+			{"model_name": "sync-bad-price-model", "quota_type": 0, "model_ratio": 2000000, "completion_ratio": 1, "model_price": 0, "description": "bad desc"}
+		]}`))
+	}))
+	defer srv.Close()
+	seedOnboardingChannel(t, db, 8104, srv.URL)
+
+	results, syncErrors, err := SyncModelsFromUpstream(context.Background(), 8104, []string{"sync-bad-price-model"})
+	require.NoError(t, err)
+	require.Empty(t, results, "坏条目不得出现在 results")
+	require.Len(t, syncErrors, 1)
+	assert.Equal(t, "sync-bad-price-model", syncErrors[0].Model)
+	assert.Contains(t, syncErrors[0].Error, "超出合法区间")
+
+	// 零写入:倍率/描述都没进。
+	_, okRatio, _ := ratio_setting.GetModelRatio("sync-bad-price-model")
+	assert.False(t, okRatio, "坏条目不得写入 ModelRatio")
+	var m model.Model
+	err = db.Where("model_name = ?", "sync-bad-price-model").First(&m).Error
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound, "坏条目不得创建 models 行")
 }
