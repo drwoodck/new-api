@@ -21,6 +21,7 @@ import (
 
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/samber/lo"
@@ -378,21 +379,8 @@ func FetchUpstreamRatios(c *gin.Context) {
 			}
 
 			// 如果不是 type1，则尝试按 type2 (/api/pricing) 解析
-			var pricingItems []struct {
-				ModelName            string   `json:"model_name"`
-				QuotaType            int      `json:"quota_type"`
-				ModelRatio           float64  `json:"model_ratio"`
-				ModelPrice           float64  `json:"model_price"`
-				CompletionRatio      float64  `json:"completion_ratio"`
-				CacheRatio           *float64 `json:"cache_ratio"`
-				CreateCacheRatio     *float64 `json:"create_cache_ratio"`
-				ImageRatio           *float64 `json:"image_ratio"`
-				AudioRatio           *float64 `json:"audio_ratio"`
-				AudioCompletionRatio *float64 `json:"audio_completion_ratio"`
-				BillingMode          string   `json:"billing_mode"`
-				BillingExpr          string   `json:"billing_expr"`
-			}
-			if err := common.Unmarshal(body.Data, &pricingItems); err != nil {
+			pricingMap, err := service.FetchUpstreamPricing(ctx, chItem.BaseURL, "")
+			if err != nil {
 				logger.LogWarn(c.Request.Context(), "unrecognized data format from "+chItem.Name+": "+err.Error())
 				ch <- upstreamResult{Name: uniqueName, Err: "无法解析上游返回数据"}
 				return
@@ -409,35 +397,32 @@ func FetchUpstreamRatios(c *gin.Context) {
 			billingModeMap := make(map[string]string)
 			billingExprMap := make(map[string]string)
 
-			for _, item := range pricingItems {
-				if item.ModelName == "" {
-					continue
-				}
+			for modelName, item := range pricingMap {
 				if item.BillingMode == billing_setting.BillingModeTieredExpr && strings.TrimSpace(item.BillingExpr) != "" {
-					billingModeMap[item.ModelName] = billing_setting.BillingModeTieredExpr
-					billingExprMap[item.ModelName] = item.BillingExpr
+					billingModeMap[modelName] = billing_setting.BillingModeTieredExpr
+					billingExprMap[modelName] = item.BillingExpr
 				}
 				if item.QuotaType == 1 {
-					modelPriceMap[item.ModelName] = item.ModelPrice
+					modelPriceMap[modelName] = item.ModelPrice
 				} else {
-					modelRatioMap[item.ModelName] = item.ModelRatio
+					modelRatioMap[modelName] = item.ModelRatio
 					// completionRatio 可能为 0，此时也直接赋值，保持与上游一致
-					completionRatioMap[item.ModelName] = item.CompletionRatio
+					completionRatioMap[modelName] = item.CompletionRatio
 				}
 				if item.CacheRatio != nil {
-					cacheRatioMap[item.ModelName] = *item.CacheRatio
+					cacheRatioMap[modelName] = *item.CacheRatio
 				}
 				if item.CreateCacheRatio != nil {
-					createCacheRatioMap[item.ModelName] = *item.CreateCacheRatio
+					createCacheRatioMap[modelName] = *item.CreateCacheRatio
 				}
 				if item.ImageRatio != nil {
-					imageRatioMap[item.ModelName] = *item.ImageRatio
+					imageRatioMap[modelName] = *item.ImageRatio
 				}
 				if item.AudioRatio != nil {
-					audioRatioMap[item.ModelName] = *item.AudioRatio
+					audioRatioMap[modelName] = *item.AudioRatio
 				}
 				if item.AudioCompletionRatio != nil {
-					audioCompletionRatioMap[item.ModelName] = *item.AudioCompletionRatio
+					audioCompletionRatioMap[modelName] = *item.AudioCompletionRatio
 				}
 			}
 
