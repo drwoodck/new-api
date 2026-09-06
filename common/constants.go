@@ -135,6 +135,12 @@ var QuotaForInvitee = 0
 var ChannelDisableThreshold = 5.0
 var AutomaticDisableChannelEnabled = false
 var AutomaticEnableChannelEnabled = false
+
+// SetCatalogAutoDraftEnabledOption 是「巡检自动起草」开关的写入钩子,由 service
+// 包在 init 时注册到 service.SetCatalogAutoDraftEnabled。model 包加载
+// CatalogAutoDraftEnabled 选项时经它落盘运行态,避免 model → service 的引用环
+// (service import model,反向会成环)。与 common.TranslateMessage 同款破环桥。
+var SetCatalogAutoDraftEnabledOption func(enabled bool) = func(bool) {}
 var QuotaRemindThreshold = 1000
 var PreConsumedQuota = 500
 

@@ -345,7 +345,7 @@ func TestFailedAdvancedCustomDetectionDoesNotStageFullRemoval(t *testing.T) {
 	channel.SetOtherSettings(settings)
 	require.NoError(t, db.Create(channel).Error)
 
-	modelsChanged, autoAdded, err := checkAndPersistChannelUpstreamModelUpdates(channel, &settings, true, true)
+	modelsChanged, autoAdded, _, err := checkAndPersistChannelUpstreamModelUpdates(channel, &settings, true, true)
 	require.ErrorContains(t, err, "no valid model IDs")
 	require.False(t, modelsChanged)
 	require.Zero(t, autoAdded)
@@ -548,6 +548,7 @@ func TestBuildUpstreamModelUpdateTaskNotificationContent_OmitOverflowDetails(t *
 		56,
 		21,
 		9,
+		3,
 		[]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
 		channelSummaries,
 		[]string{
@@ -561,6 +562,7 @@ func TestBuildUpstreamModelUpdateTaskNotificationContent_OmitOverflowDetails(t *
 		},
 	)
 
+	require.Contains(t, content, "画布目录新增起草 3 条")
 	require.Contains(t, content, "其余 4 个渠道已省略")
 	require.Contains(t, content, "其余 1 个已省略")
 	require.Contains(t, content, "失败渠道 ID（展示 10/12）")

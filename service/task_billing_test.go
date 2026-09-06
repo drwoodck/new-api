@@ -57,6 +57,7 @@ func TestMain(m *testing.M) {
 		&model.ModelGroupPrice{},
 		&model.Ability{},
 		&model.Vendor{},
+		&model.CanvasCatalogModel{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -85,6 +86,7 @@ func truncate(t *testing.T) {
 		model.DB.Exec("DELETE FROM model_group_prices")
 		model.DB.Exec("DELETE FROM abilities")
 		model.DB.Exec("DELETE FROM vendors")
+		model.DB.Exec("DELETE FROM canvas_catalog_models")
 		// 每个用到分组分别定价的测试都会把新建的 Model 行灌进
 		// modelGroupPricingEnabled 缓存,上面几行清完 DB 后必须再刷新一次缓存,
 		// 否则下一个测试会读到上一个测试残留的开关状态(哪怕 DB 里已经没有那行了)。

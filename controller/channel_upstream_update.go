@@ -504,13 +504,13 @@ func checkAndPersistChannelUpstreamModelUpdates(
 	settings *dto.ChannelOtherSettings,
 	force bool,
 	allowAutoApply bool,
-) (modelsChanged bool, autoAdded int, err error) {
+) (modelsChanged bool, autoAdded int, catalogDrafted int, err error) {
 	now := common.GetTimestamp()
 	if !force {
 		minInterval := getUpstreamModelUpdateMinCheckIntervalSeconds()
 		if settings.UpstreamModelUpdateLastCheckTime > 0 &&
 			now-settings.UpstreamModelUpdateLastCheckTime < minInterval {
-			return false, 0, nil
+			return false, 0, 0, nil
 		}
 	}
 
@@ -518,9 +518,9 @@ func checkAndPersistChannelUpstreamModelUpdates(
 	settings.UpstreamModelUpdateLastCheckTime = now
 	if fetchErr != nil {
 		if err = updateChannelUpstreamModelSettings(channel, *settings, false); err != nil {
-			return false, 0, err
+			return false, 0, 0, err
 		}
-		return false, 0, fetchErr
+		return false, 0, 0, fetchErr
 	}
 
 	if allowAutoApply && settings.UpstreamModelUpdateAutoSyncEnabled && len(pendingAddModels) > 0 {
@@ -530,6 +530,14 @@ func checkAndPersistChannelUpstreamModelUpdates(
 			channel.Models = strings.Join(mergedModels, ",")
 			autoAdded = len(mergedModels) - len(originModels)
 			modelsChanged = true
+			// 只起草真正进入渠道 models 的模型(已进渠道、真的在服务);未应用
+			// 的 pendingAdd 留给管理员应用时走工作台。起草失败不阻塞 auto apply,
+			// 记 log 后按 0 处理,不影响本函数其它结果。
+			catalogDrafted, err = service.DraftCatalogEntries(channel, subtractModelNames(mergedModels, originModels))
+			if err != nil {
+				common.SysLog(fmt.Sprintf("画布目录自动起草失败: channel_id=%d err=%v", channel.Id, err))
+				catalogDrafted = 0
+			}
 		}
 		settings.UpstreamModelUpdateLastDetectedModels = []string{}
 	} else {
@@ -538,14 +546,14 @@ func checkAndPersistChannelUpstreamModelUpdates(
 	settings.UpstreamModelUpdateLastRemovedModels = pendingRemoveModels
 
 	if err = updateChannelUpstreamModelSettings(channel, *settings, modelsChanged); err != nil {
-		return false, autoAdded, err
+		return false, autoAdded, catalogDrafted, err
 	}
 	if modelsChanged {
 		if err = channel.UpdateAbilities(nil); err != nil {
-			return true, autoAdded, err
+			return true, autoAdded, catalogDrafted, err
 		}
 	}
-	return modelsChanged, autoAdded, nil
+	return modelsChanged, autoAdded, catalogDrafted, nil
 }
 
 func refreshChannelRuntimeCache() {
@@ -588,6 +596,7 @@ func buildUpstreamModelUpdateTaskNotificationContent(
 	detectedAddModels int,
 	detectedRemoveModels int,
 	autoAddedModels int,
+	catalogDrafted int,
 	failedChannelIDs []int,
 	channelSummaries []upstreamModelUpdateChannelSummary,
 	addModelSamples []string,
@@ -604,6 +613,9 @@ func buildUpstreamModelUpdateTaskNotificationContent(
 		autoAddedModels,
 		failedChannels,
 	))
+	if catalogDrafted > 0 {
+		builder.WriteString(fmt.Sprintf("画布目录新增起草 %d 条。", catalogDrafted))
+	}
 
 	if len(channelSummaries) > 0 {
 		displayCount := min(len(channelSummaries), channelUpstreamModelUpdateNotifyMaxChannelDetails)
@@ -667,6 +679,7 @@ type upstreamModelUpdateSummary struct {
 	DetectedRemoveModels int `json:"detected_remove_models"`
 	FailedChannels       int `json:"failed_channels"`
 	AutoAddedModels      int `json:"auto_added_models"`
+	CatalogDrafted       int `json:"catalog_drafted"`
 }
 
 // runChannelUpstreamModelUpdateTaskOnce runs one synchronous upstream model
@@ -685,6 +698,7 @@ func runChannelUpstreamModelUpdateTaskOnce(ctx context.Context, force bool, allo
 	detectedAddModels := 0
 	detectedRemoveModels := 0
 	autoAddedModels := 0
+	catalogDrafted := 0
 	channelSummaries := make([]upstreamModelUpdateChannelSummary, 0)
 	addModelSamples := make([]string, 0)
 	removeModelSamples := make([]string, 0)
@@ -742,13 +756,14 @@ scanLoop:
 			}
 
 			checkedChannels++
-			modelsChanged, autoAdded, err := checkAndPersistChannelUpstreamModelUpdates(channel, &settings, force, allowAutoApply)
+			modelsChanged, autoAdded, channelCatalogDrafted, err := checkAndPersistChannelUpstreamModelUpdates(channel, &settings, force, allowAutoApply)
 			if err != nil {
 				failedChannels++
 				failedChannelIDs = append(failedChannelIDs, channel.Id)
 				common.SysLog(fmt.Sprintf("upstream model update check failed: channel_id=%d channel_name=%s err=%v", channel.Id, channel.Name, err))
 				continue
 			}
+			catalogDrafted += channelCatalogDrafted
 			currentAddModels := normalizeModelNames(settings.UpstreamModelUpdateLastDetectedModels)
 			currentRemoveModels := normalizeModelNames(settings.UpstreamModelUpdateLastRemovedModels)
 			currentAddCount := len(currentAddModels) + autoAdded
@@ -803,17 +818,19 @@ scanLoop:
 		DetectedRemoveModels: detectedRemoveModels,
 		FailedChannels:       failedChannels,
 		AutoAddedModels:      autoAddedModels,
+		CatalogDrafted:       catalogDrafted,
 	}
 
 	if checkedChannels > 0 || common.DebugEnabled {
 		common.SysLog(fmt.Sprintf(
-			"upstream model update task done: checked_channels=%d changed_channels=%d detected_add_models=%d detected_remove_models=%d failed_channels=%d auto_added_models=%d",
+			"upstream model update task done: checked_channels=%d changed_channels=%d detected_add_models=%d detected_remove_models=%d failed_channels=%d auto_added_models=%d catalog_drafted=%d",
 			checkedChannels,
 			changedChannels,
 			detectedAddModels,
 			detectedRemoveModels,
 			failedChannels,
 			autoAddedModels,
+			catalogDrafted,
 		))
 	}
 	if changedChannels > 0 || failedChannels > 0 {
@@ -834,6 +851,7 @@ scanLoop:
 				detectedAddModels,
 				detectedRemoveModels,
 				autoAddedModels,
+				catalogDrafted,
 				failedChannelIDs,
 				channelSummaries,
 				addModelSamples,
@@ -921,7 +939,7 @@ func DetectChannelUpstreamModelUpdates(c *gin.Context) {
 	}
 
 	settings := channel.GetOtherSettings()
-	modelsChanged, autoAdded, err := checkAndPersistChannelUpstreamModelUpdates(channel, &settings, true, false)
+	modelsChanged, autoAdded, _, err := checkAndPersistChannelUpstreamModelUpdates(channel, &settings, true, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
