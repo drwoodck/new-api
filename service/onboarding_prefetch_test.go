@@ -532,6 +532,92 @@ func TestSyncFromUpstreamEndToEnd(t *testing.T) {
 	assert.Contains(t, skippedFields(sentRes.Skipped), "model_ratio")
 }
 
+func floatPtr(v float64) *float64 { return &v }
+
+// TestApplyUpstreamEntryTierSecondMutualExclusion 钉住档表/秒价双向互斥清理:
+//   - 上游从档表切秒价(条目带 video_second_price、无 price_tiers):apply 后
+//     GetVideoPriceTiers 不命中、GetVideoSecondPrice 命中,档表残留键被删;
+//   - 反方向(条目带 price_tiers):秒价残留键被删,档表命中。
+func TestApplyUpstreamEntryTierSecondMutualExclusion(t *testing.T) {
+	setupOnboardingPrefetchTest(t)
+
+	// 造"脏状态":同一模型同时挂秒价与档表(历史残留)。
+	require.NoError(t, ratio_setting.UpdateVideoSecondPriceByJSONString(`{"sync-mutex-video-model":0.02}`))
+	require.NoError(t, ratio_setting.UpdateVideoPriceTiersByJSONString(`{"sync-mutex-video-model":[
+		{"label": "720P", "tier_type": "resolution", "key": "720p", "billing_unit": "second", "price": 0.002}
+	]}`))
+
+	// 方向一:上游条目只带秒价(从档表切秒价)→ 档表残留键被删。
+	secondEntry := UpstreamModelPricing{
+		ModelName:        "sync-mutex-video-model",
+		QuotaType:        0,
+		ModelRatio:       1.0,
+		VideoSecondPrice: floatPtr(0.03),
+	}
+	applied, _, err := ApplyUpstreamEntryToSettings(&secondEntry)
+	require.NoError(t, err)
+	assert.Contains(t, appliedFields(applied), "video_second_price")
+	assert.Contains(t, appliedFields(applied), "price_tiers", "秒价方向必须清理档表残留键")
+
+	second, okSecond := ratio_setting.GetVideoSecondPrice("sync-mutex-video-model")
+	assert.True(t, okSecond)
+	assert.InDelta(t, 0.03, second, 1e-9)
+	_, okTier := ratio_setting.GetVideoPriceTiers("sync-mutex-video-model")
+	assert.False(t, okTier, "切秒价后档表残留键必须删除")
+
+	// 方向二:上游条目带档表(从秒价切档表)→ 秒价残留键被删。
+	tierEntry := UpstreamModelPricing{
+		ModelName:  "sync-mutex-video-model",
+		QuotaType:  0,
+		ModelRatio: 1.0,
+		PriceTiers: &types.PriceTierList{
+			{Label: "1080P", TierType: types.TierTypeResolution, Key: "1080p", BillingUnit: types.BillingUnitSecond, Price: 0.004},
+		},
+	}
+	applied, _, err = ApplyUpstreamEntryToSettings(&tierEntry)
+	require.NoError(t, err)
+	assert.Contains(t, appliedFields(applied), "price_tiers")
+	assert.Contains(t, appliedFields(applied), "video_second_price", "档表方向必须清理秒价残留键")
+
+	tiers, okTier := ratio_setting.GetVideoPriceTiers("sync-mutex-video-model")
+	assert.True(t, okTier)
+	require.Len(t, tiers, 1)
+	assert.Equal(t, "1080p", tiers[0].Key)
+	_, okSecond = ratio_setting.GetVideoSecondPrice("sync-mutex-video-model")
+	assert.False(t, okSecond, "切档表后秒价残留键必须删除")
+}
+
+// TestApplyUpstreamEntryNewMetaInheritsGroupFlag 钉住新建 models 行的分组开关
+// 继承:该模型已有分组定价行时,description 同步新建的 meta 行必须带
+// GroupPricingEnabled=true(与 controller.launchOnboardingModel 同款),否则分组
+// 行失效、计费回退全局倍率。
+func TestApplyUpstreamEntryNewMetaInheritsGroupFlag(t *testing.T) {
+	db := setupOnboardingPrefetchTest(t)
+
+	// 该模型无 models 行,但有分组定价行。
+	groupPrice := 1.0
+	require.NoError(t, db.Create(&model.ModelGroupPrice{
+		ModelName: "sync-desc-group-model", GroupName: "default", ModelPrice: &groupPrice,
+	}).Error)
+
+	entry := UpstreamModelPricing{
+		ModelName:   "sync-desc-group-model",
+		QuotaType:   0,
+		ModelRatio:  1.0,
+		Description: "desc for group-priced model",
+	}
+	applied, skipped, err := ApplyUpstreamEntryToSettings(&entry)
+	require.NoError(t, err)
+	require.Empty(t, skipped)
+	assert.Contains(t, appliedFields(applied), "description")
+
+	var m model.Model
+	require.NoError(t, db.Where("model_name = ?", "sync-desc-group-model").First(&m).Error)
+	assert.Equal(t, "desc for group-priced model", m.Description)
+	assert.Equal(t, 1, m.Status)
+	assert.True(t, m.GroupPricingEnabled, "新建 meta 行必须继承 group_pricing_enabled=true")
+}
+
 // TestSyncFromUpstreamSkipsInvalidNormalized 钉住准入闸门:Normalize 失败的条目
 // (valid=false)直接进 sync 响应的 errors,不进 Apply,零写入。per-field 护栏只作
 // 纵深防御,入口处不半应用已知坏条目。

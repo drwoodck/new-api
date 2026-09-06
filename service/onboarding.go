@@ -398,11 +398,12 @@ func applyOptionField[V any](name, fieldName, optionKey string, current map[stri
 }
 
 // staleKeySpec 描述一条"互斥清理"的删除目标:fieldName 与 optionKey 用于变更记录
-// 与持久化,current 是读回的整表副本。
-type staleKeySpec struct {
+// 与持久化,current 是读回的整表副本。值类型泛型以覆盖 float64 倍率表与
+// PriceTierList 档表两类 option。
+type staleKeySpec[V any] struct {
 	fieldName string
 	optionKey string
-	current   map[string]float64
+	current   map[string]V
 }
 
 // oldStringOrNil 把字符串 option 的旧值转成 FieldChange.Old:未配置返回 nil。
@@ -416,7 +417,7 @@ func oldStringOrNil(old string, existed bool) interface{} {
 // deleteStaleOptionKeys 从整表副本里删除该模型的键并写回(applyOptionField 的
 // delete 语义)。与手动清空某模型配置的语义一致:键存在 → 删后写回并记 applied
 // (old=被删值,new=nil);键本就不存在 → 不写、不记录。
-func deleteStaleOptionKeys(name string, specs []staleKeySpec, applied *[]FieldChange, skipped *[]FieldSkip) {
+func deleteStaleOptionKeys[V any](name string, specs []staleKeySpec[V], applied *[]FieldChange, skipped *[]FieldSkip) {
 	for _, spec := range specs {
 		old, existed := spec.current[name]
 		if !existed {
@@ -461,6 +462,11 @@ func upsertModelDescription(name, description string) (old string, existed bool,
 	}
 	if m.Id == 0 {
 		meta := &model.Model{ModelName: name, Description: description, Status: 1}
+		// 与 controller.launchOnboardingModel 同款:该模型已有分组定价行时,新建
+		// meta 行必须继承 GroupPricingEnabled=true,否则分组行失效、计费回退全局倍率。
+		if hasGroupPrice, gErr := model.HasAnyModelGroupPrice(name); gErr == nil && hasGroupPrice {
+			meta.GroupPricingEnabled = true
+		}
 		return "", false, meta.Insert()
 	}
 	old = m.Description
@@ -501,7 +507,7 @@ func ApplyUpstreamEntryToSettings(p *UpstreamModelPricing) (applied []FieldChang
 		} else {
 			skipped = append(skipped, FieldSkip{Field: "model_price", Reason: fmt.Sprintf("model_price %v 超出合法区间 [0, %g]", p.ModelPrice, types.MaxTierPrice)})
 		}
-		deleteStaleOptionKeys(name, []staleKeySpec{
+		deleteStaleOptionKeys(name, []staleKeySpec[float64]{
 			{"model_ratio", "ModelRatio", ratio_setting.GetModelRatioCopy()},
 			{"completion_ratio", "CompletionRatio", ratio_setting.GetCompletionRatioCopy()},
 		}, &applied, &skipped)
@@ -518,7 +524,7 @@ func ApplyUpstreamEntryToSettings(p *UpstreamModelPricing) (applied []FieldChang
 		} else {
 			skipped = append(skipped, FieldSkip{Field: "completion_ratio", Reason: fmt.Sprintf("completion_ratio %v 超出合法区间 [0, %g]", p.CompletionRatio, types.MaxTierPrice)})
 		}
-		deleteStaleOptionKeys(name, []staleKeySpec{
+		deleteStaleOptionKeys(name, []staleKeySpec[float64]{
 			{"model_price", "ModelPrice", ratio_setting.GetModelPriceCopy()},
 		}, &applied, &skipped)
 	}
@@ -548,18 +554,25 @@ func ApplyUpstreamEntryToSettings(p *UpstreamModelPricing) (applied []FieldChang
 	}
 
 	// video_second_price:Plan2 遗留裁决——PriceTiers 非空时档表优先,跳过按秒价。
+	// 档表/秒价双向互斥:两侧写入都清掉对方的残留键,同一模型不会同时挂两套
+	// 视频计费口径。
 	if p.VideoSecondPrice != nil {
 		if p.PriceTiers != nil && len(*p.PriceTiers) > 0 {
 			skipped = append(skipped, FieldSkip{Field: "video_second_price", Reason: "tier table wins:已配置 price_tiers,跳过 video_second_price"})
 		} else if inPriceBound(*p.VideoSecondPrice) {
 			change, ferr := applyOptionField(name, "video_second_price", "VideoSecondPrice", ratio_setting.GetVideoSecondPriceCopy(), *p.VideoSecondPrice)
 			recordFieldResult("video_second_price", change, ferr, &applied, &skipped)
+			deleteStaleOptionKeys(name, []staleKeySpec[types.PriceTierList]{
+				{"price_tiers", "VideoPriceTiers", ratio_setting.GetVideoPriceTiersCopy()},
+			}, &applied, &skipped)
 		} else {
 			skipped = append(skipped, FieldSkip{Field: "video_second_price", Reason: fmt.Sprintf("video_second_price %v 超出合法区间 [0, %g]", *p.VideoSecondPrice, types.MaxTierPrice)})
 		}
 	}
 
 	// price_tiers:条目级 NormalizePriceTierList 校验失败 skip,不影响其它字段。
+	// 写入成功即清掉同模型 VideoSecondPrice 残留(含上面被 tier table wins 跳过
+	// 的场景,由这里兜底清理)。
 	if p.PriceTiers != nil && len(*p.PriceTiers) > 0 {
 		norm, terr := types.NormalizePriceTierList(*p.PriceTiers)
 		if terr != nil {
@@ -567,6 +580,9 @@ func ApplyUpstreamEntryToSettings(p *UpstreamModelPricing) (applied []FieldChang
 		} else {
 			change, ferr := applyOptionField(name, "price_tiers", "VideoPriceTiers", ratio_setting.GetVideoPriceTiersCopy(), norm)
 			recordFieldResult("price_tiers", change, ferr, &applied, &skipped)
+			deleteStaleOptionKeys(name, []staleKeySpec[float64]{
+				{"video_second_price", "VideoSecondPrice", ratio_setting.GetVideoSecondPriceCopy()},
+			}, &applied, &skipped)
 		}
 	}
 

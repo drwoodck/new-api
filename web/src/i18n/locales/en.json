@@ -5583,6 +5583,9 @@
     "无变更": "No changes",
     "同步失败": "Sync failed",
     "上游没有返回可同步的模型条目": "The upstream returned no syncable model entries",
-    "更新成功:共更新 {{count}} 个模型": "Update succeeded: {{count}} model(s) updated"
+    "更新成功:共更新 {{count}} 个模型": "Update succeeded: {{count}} model(s) updated",
+    "编辑": "Edit",
+    "加载中...": "Loading...",
+    "操作失败": "Operation failed"
 }
 }

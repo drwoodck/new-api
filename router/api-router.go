@@ -283,7 +283,14 @@ func SetApiRouter(router *gin.Engine) {
 			onboardingRoute.POST("/launch", controller.LaunchOnboardingModels)
 			onboardingRoute.POST("/ignore", controller.IgnoreOnboardingModels)
 			onboardingRoute.GET("/prefetch", controller.PrefetchOnboardingPricing)
-			onboardingRoute.POST("/sync_from_upstream", controller.SyncOnboardingFromUpstream)
+		}
+		// sync_from_upstream 会整表改写全局计费 option(等价于手改 ModelRatio 等
+		// 核心配置),权限对齐 /api/option 与 /api/ratio_sync/fetch 的既有惯例,
+		// 仅 Root 可用;工作台其余路由保持 AdminAuth。
+		onboardingRootRoute := apiRouter.Group("/onboarding")
+		onboardingRootRoute.Use(middleware.RootAuth())
+		{
+			onboardingRootRoute.POST("/sync_from_upstream", controller.SyncOnboardingFromUpstream)
 		}
 
 		usageRoute := apiRouter.Group("/usage")
