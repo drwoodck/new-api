@@ -379,7 +379,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 			}
 
 			// 如果不是 type1，则尝试按 type2 (/api/pricing) 解析
-			pricingMap, err := service.FetchUpstreamPricing(ctx, chItem.BaseURL, "")
+			pricingMap, err := service.FetchUpstreamPricingFromBody(bodyBytes)
 			if err != nil {
 				logger.LogWarn(c.Request.Context(), "unrecognized data format from "+chItem.Name+": "+err.Error())
 				ch <- upstreamResult{Name: uniqueName, Err: "无法解析上游返回数据"}

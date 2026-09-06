@@ -125,6 +125,28 @@ func TestUpstreamPricingFetch(t *testing.T) {
 	assert.Error(t, NormalizeUpstreamPricingEntry(&invalid))
 }
 
+func TestUpstreamPricingFromBody(t *testing.T) {
+	t.Run("valid-body", func(t *testing.T) {
+		result, err := FetchUpstreamPricingFromBody([]byte(upstreamPricingFixture))
+		require.NoError(t, err)
+		require.Len(t, result, 4)
+		full, ok := result["full-field-model"]
+		require.True(t, ok)
+		require.NotNil(t, full.VideoSecondPrice)
+		assert.Equal(t, 0.02, *full.VideoSecondPrice)
+	})
+
+	t.Run("invalid-json", func(t *testing.T) {
+		_, err := FetchUpstreamPricingFromBody([]byte(`not json`))
+		require.Error(t, err)
+	})
+
+	t.Run("success-false", func(t *testing.T) {
+		_, err := FetchUpstreamPricingFromBody([]byte(`{"success": false, "message": "boom"}`))
+		require.Error(t, err)
+	})
+}
+
 func TestUpstreamPricingFetchErrors(t *testing.T) {
 	t.Run("non-200", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -103,13 +103,19 @@ func FetchUpstreamPricing(ctx context.Context, baseURL string, proxy string) (ma
 	if err != nil {
 		return nil, fmt.Errorf("read response failed: %w", err)
 	}
+	return FetchUpstreamPricingFromBody(bodyBytes)
+}
 
+// FetchUpstreamPricingFromBody 解析上游 type2(/api/pricing)响应体,
+// 返回按模型名索引的原始条目 map。纯解析不做 HTTP——ratio_sync 等既有
+// 调用方已按自己的 client/endpoint 构造拉回 body,复用它避免二次外呼。
+func FetchUpstreamPricingFromBody(rawBody []byte) (map[string]UpstreamModelPricing, error) {
 	var body struct {
 		Success bool            `json:"success"`
 		Data    json.RawMessage `json:"data"`
 		Message string          `json:"message"`
 	}
-	if err := common.DecodeJson(bytes.NewReader(bodyBytes), &body); err != nil {
+	if err := common.DecodeJson(bytes.NewReader(rawBody), &body); err != nil {
 		return nil, fmt.Errorf("json decode failed: %w", err)
 	}
 	if !body.Success {
