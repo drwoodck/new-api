@@ -25,12 +25,16 @@ import (
 // 出去,客户端整份目录都会解析失败(reqwest "error decoding response body"),
 // 必须在这里做一次存储格式 → 契约格式的转换。
 type canvasCatalogWireModel struct {
-	RemoteID       string          `json:"remote_id"`
-	DisplayName    string          `json:"display_name"`
-	Capabilities   []string        `json:"capabilities"`
-	Enabled        bool            `json:"enabled"`
-	Description    *string         `json:"description"`
-	Pricing        *string         `json:"pricing"`
+	RemoteID     string   `json:"remote_id"`
+	DisplayName  string   `json:"display_name"`
+	Capabilities []string `json:"capabilities"`
+	Enabled      bool     `json:"enabled"`
+	Description  *string  `json:"description"`
+	Pricing      *string  `json:"pricing"`
+	// PricingSource 标记 pricing 文案来源:auto = 按计费真源自动生成,
+	// custom = 管理员手填覆盖。空 = 旧响应(本字段引入前的缓存)不下发,
+	// 客户端 serde 忽略未知字段,向后兼容。
+	PricingSource  string          `json:"pricing_source,omitempty"`
 	Limitations    *string         `json:"limitations"`
 	Contract       string          `json:"contract"`
 	ParamSchema    json.RawMessage `json:"param_schema"`
@@ -225,6 +229,14 @@ func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, g
 	}
 	if m.Pricing != "" {
 		w.Pricing = &m.Pricing
+		w.PricingSource = "custom"
+	} else {
+		// 自动文案(2026-09-04 spec 3.3):与计费同一套解析,管理端未手填时
+		// 由后端生成,保证「目录宣传 = 实际计费」。
+		if summary := model.GeneratePricingSummary(m.RemoteID, group); summary != "" {
+			w.Pricing = &summary
+			w.PricingSource = "auto"
+		}
 	}
 	if m.Limitations != "" {
 		w.Limitations = &m.Limitations
