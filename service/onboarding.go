@@ -51,6 +51,9 @@ func HasAnyBillingConfig(modelName string) bool {
 			return true
 		}
 	}
+	// 该查询不区分 flag 状态:开关关、甚至没有 models 行的孤儿分组价行也算
+	// "已配价" —— 过度计数方向,可接受。与 launch 新建 models 行时继承
+	// GroupPricingEnabled(controller.launchOnboardingModel)配对,实际影响面已闭合。
 	has, err := model.HasAnyModelGroupPrice(modelName)
 	if err != nil {
 		common.SysError(fmt.Sprintf("查询模型 %s 的分组定价行失败: %v", modelName, err))

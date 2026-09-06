@@ -67,6 +67,13 @@ func launchOnboardingModel(name string) error {
 	err := model.DB.Unscoped().Where("model_name = ?", name).First(&m).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		meta := &model.Model{ModelName: name, Status: 1, SyncOfficial: 1}
+		// 若该模型已有分组定价行,新建 meta 行必须继承 GroupPricingEnabled=true:
+		// 分组行是唯一价时,开闸后 flag=false 会让分组行失效、计费回退全局倍率
+		// (37.5 兜底)。与 service.HasAnyBillingConfig 把孤儿行也算已配价的
+		// 过度计数配对,影响面在此闭合。
+		if hasGroupPrice, gErr := model.HasAnyModelGroupPrice(name); gErr == nil && hasGroupPrice {
+			meta.GroupPricingEnabled = true
+		}
 		if err := meta.Insert(); err != nil {
 			return err
 		}

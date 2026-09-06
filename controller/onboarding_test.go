@@ -240,6 +240,8 @@ func TestOnboardingLaunchCreatesMetaAndEnablesCatalog(t *testing.T) {
 	var m model.Model
 	require.NoError(t, model.DB.Where("model_name = ?", "new-model").First(&m).Error)
 	assert.Equal(t, 1, m.Status, "无 models 行时应新建 status=1 的 meta 行")
+	assert.True(t, m.GroupPricingEnabled,
+		"已有分组定价行的模型,新建 meta 行必须继承 group_pricing_enabled=true,否则分组行失效")
 
 	entry, err := model.GetCanvasCatalogModelByRemoteID("new-model")
 	require.NoError(t, err)
