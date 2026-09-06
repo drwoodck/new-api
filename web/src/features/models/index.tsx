@@ -35,6 +35,7 @@ import { ModelsPrimaryButtons } from './components/models-primary-buttons'
 import { ModelsProvider, useModels } from './components/models-provider'
 import { ModelsTable } from './components/models-table'
 import { useModelDeploymentSettings } from './hooks/use-model-deployment-settings'
+import { OnboardingWorkbench } from '@/features/onboarding'
 import { deploymentsQueryKeys } from './lib'
 import {
   type ModelsSectionId,
@@ -50,6 +51,9 @@ const SECTION_META: Record<ModelsSectionId, { titleKey: string }> = {
   },
   deployments: {
     titleKey: 'Deployments',
+  },
+  onboarding: {
+    titleKey: '上新工作台',
   },
 }
 
@@ -81,6 +85,13 @@ function ModelsContent() {
     [navigate]
   )
 
+  // 拆函数避免 JSX 里的嵌套三元(lint 规则 no-nested-ternary)。
+  const renderSectionContent = () => {
+    if (activeSection === 'metadata') return <ModelsTable />
+    if (activeSection === 'onboarding') return <OnboardingWorkbench />
+    return <DeploymentsSection />
+  }
+
   const meta = SECTION_META[activeSection] ?? SECTION_META.metadata
 
   return (
@@ -108,13 +119,7 @@ function ModelsContent() {
                 ))}
               </TabsList>
             </Tabs>
-            <div className='min-h-0 flex-1'>
-              {activeSection === 'metadata' ? (
-                <ModelsTable />
-              ) : (
-                <DeploymentsSection />
-              )}
-            </div>
+            <div className='min-h-0 flex-1'>{renderSectionContent()}</div>
           </div>
         </SectionPageLayout.Content>
       </SectionPageLayout>

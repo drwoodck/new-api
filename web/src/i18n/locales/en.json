@@ -5539,6 +5539,30 @@
     "Estimated seconds billed when an audio material has no explicit or measurable duration. Per-model default_seconds overrides this.": "Estimated seconds billed when an audio material has no explicit or measurable duration. Per-model default_seconds overrides this.",
     "秒价为 0 或留空时，该分组不启用按秒计费。": "A second price of 0 or blank disables per-second billing for the group.",
     "价格填 0 表示该类型显式免费，条目保留。": "A price of 0 marks the type as explicitly free (the entry is kept).",
-    "Enter an integer between 0 and 3600": "Enter an integer between 0 and 3600"
-  }
+    "Enter an integer between 0 and 3600": "Enter an integer between 0 and 3600",
+    "上新工作台": "Onboarding workbench",
+    "待补元数据": "Models missing metadata",
+    "待定价": "Models to price",
+    "待上线目录": "Draft catalog to launch",
+    "没有待补元数据的模型": "No models are missing metadata",
+    "没有待定价的模型": "No models need pricing",
+    "没有待上线的目录条目": "No draft catalog entries to launch",
+    "忽略": "Ignore",
+    "开闸": "Launch",
+    "开闸中...": "Launching...",
+    "全部开闸": "Launch all",
+    "起草中": "Draft",
+    "能力": "Capabilities",
+    "契约": "Contract",
+    "未配置": "Not configured",
+    "该模型未定价,确认强制开闸?": "This model is unpriced. Force launch?",
+    "「{{name}}」尚无定价配置。强制开闸后它将按兜底倍率(默认 37.5)计费,可能产生与实际成本不符的扣费。建议先在模型管理页为它定价再开闸。": "\"{{name}}\" has no pricing configured. After a force launch it will be billed at the fallback ratio (37.5 by default), which may not match its actual cost. Price it in model management first if possible.",
+    "强制开闸": "Force launch",
+    "以下模型未定价,确认强制开闸?": "These models are unpriced. Force launch?",
+    "强制开闸后未定价模型将按兜底倍率(默认 37.5)计费。": "Unpriced models will be billed at the fallback ratio (37.5 by default) after a force launch.",
+    "去模型管理页": "Go to model management",
+    "成功开闸 {{count}} 个模型": "Successfully launched {{count}} model(s)",
+    "已加入忽略名单": "Added to ignore list",
+    "开闸失败": "Launch failed"
+}
 }

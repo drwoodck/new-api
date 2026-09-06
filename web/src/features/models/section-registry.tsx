@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { createSectionRegistry } from '@/features/system-settings/utils/section-registry'
 
+import { OnboardingWorkbench } from '@/features/onboarding'
+
 /**
  * Models page section definitions
  */
@@ -31,6 +33,11 @@ const MODELS_SECTIONS = [
     id: 'deployments',
     titleKey: 'Deployments',
     build: () => null, // Content is rendered directly in the page component
+  },
+  {
+    id: 'onboarding',
+    titleKey: '上新工作台',
+    build: () => <OnboardingWorkbench />,
   },
 ] as const
 
