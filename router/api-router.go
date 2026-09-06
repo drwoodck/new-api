@@ -282,6 +282,8 @@ func SetApiRouter(router *gin.Engine) {
 			onboardingRoute.GET("/overview", controller.GetOnboardingOverview)
 			onboardingRoute.POST("/launch", controller.LaunchOnboardingModels)
 			onboardingRoute.POST("/ignore", controller.IgnoreOnboardingModels)
+			onboardingRoute.GET("/prefetch", controller.PrefetchOnboardingPricing)
+			onboardingRoute.POST("/sync_from_upstream", controller.SyncOnboardingFromUpstream)
 		}
 
 		usageRoute := apiRouter.Group("/usage")

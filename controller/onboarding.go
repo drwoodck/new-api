@@ -3,6 +3,8 @@ package controller
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -124,4 +126,63 @@ func IgnoreOnboardingModels(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, gin.H{"ignored": merged})
+}
+
+// PrefetchOnboardingPricing 上游预填:
+// GET /api/onboarding/prefetch?channel_id=N&model_names=a,b(空=全部)。
+// 实时拉取 + 60s 短缓存,响应 {entries: {model: {…, suspicious, valid, error?}},
+// source: baseURL}。坏条目标 valid=false 不阻塞其它。
+func PrefetchOnboardingPricing(c *gin.Context) {
+	channelID, err := strconv.Atoi(c.Query("channel_id"))
+	if err != nil || channelID <= 0 {
+		common.ApiErrorMsg(c, "channel_id 必填且为正整数")
+		return
+	}
+	var modelNames []string
+	if raw := c.Query("model_names"); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			if name := strings.TrimSpace(part); name != "" {
+				modelNames = append(modelNames, name)
+			}
+		}
+	}
+	entries, source, err := service.PrefetchUpstreamPricing(c.Request.Context(), channelID, modelNames)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{
+		"entries": entries,
+		"source":  source,
+	})
+}
+
+type syncOnboardingRequest struct {
+	ChannelID  int      `json:"channel_id"`
+	ModelNames []string `json:"model_names"`
+}
+
+// SyncOnboardingFromUpstream 一键同步:
+// POST /api/onboarding/sync_from_upstream body {channel_id, model_names?}。
+// 拉上游 → 逐模型逐字段应用,响应 {results: [{model, applied, skipped,
+// suspicious}], errors: [{model, error}]}。分组独立价与目录手填 pricing 不碰。
+func SyncOnboardingFromUpstream(c *gin.Context) {
+	var req syncOnboardingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if req.ChannelID <= 0 {
+		common.ApiErrorMsg(c, "channel_id 必填且为正整数")
+		return
+	}
+	results, syncErrors, err := service.SyncModelsFromUpstream(c.Request.Context(), req.ChannelID, req.ModelNames)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{
+		"results": results,
+		"errors":  syncErrors,
+	})
 }
