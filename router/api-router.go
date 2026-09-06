@@ -276,6 +276,14 @@ func SetApiRouter(router *gin.Engine) {
 			canvasAdminRoute.GET("/contract-stats", controller.GetCanvasContractStats)
 		}
 
+		onboardingRoute := apiRouter.Group("/onboarding")
+		onboardingRoute.Use(middleware.AdminAuth())
+		{
+			onboardingRoute.GET("/overview", controller.GetOnboardingOverview)
+			onboardingRoute.POST("/launch", controller.LaunchOnboardingModels)
+			onboardingRoute.POST("/ignore", controller.IgnoreOnboardingModels)
+		}
+
 		usageRoute := apiRouter.Group("/usage")
 		usageRoute.Use(middleware.CORS(), middleware.CriticalRateLimit())
 		{

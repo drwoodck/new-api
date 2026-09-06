@@ -58,6 +58,18 @@ func GetModelGroupPrices(modelName string) ([]ModelGroupPrice, error) {
 	return rows, err
 }
 
+// HasAnyModelGroupPrice 返回该模型在 model_group_price 表中是否存在任意一行。
+// 上新工作台"是否已配价"判定用:只要有一行就算配了分组定价,不关心具体哪个
+// 分组 —— 逐个分组遍历 GetModelGroupPrice 在批量场景下是 N 次查询,Exists 一次到位。
+func HasAnyModelGroupPrice(modelName string) (bool, error) {
+	var cnt int64
+	err := DB.Model(&ModelGroupPrice{}).Where("model_name = ?", modelName).Count(&cnt).Error
+	if err != nil {
+		return false, err
+	}
+	return cnt > 0, nil
+}
+
 // GetModelGroupPrice 查单个模型对单个分组的价格行。未配置时返回 (nil, nil) ——
 // 调用方(计费/目录)据此判定"该分组不可用",不是 error。
 func GetModelGroupPrice(modelName, groupName string) (*ModelGroupPrice, error) {

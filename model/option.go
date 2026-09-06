@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +30,14 @@ func AllOption() ([]*Option, error) {
 	return options, err
 }
 
+// GetOption 读取单个 option 的当前值。返回 "" 表示该键未注册/未写入。
+// 调用方按需自行解析(如 JSON 数组/布尔)。
+func GetOption(key string) string {
+	common.OptionMapRWMutex.RLock()
+	defer common.OptionMapRWMutex.RUnlock()
+	return common.OptionMap[key]
+}
+
 func InitOptionMap() {
 	common.OptionMapRWMutex.Lock()
 	common.OptionMap = make(map[string]string)
@@ -50,6 +59,7 @@ func InitOptionMap() {
 	common.OptionMap["AutomaticDisableChannelEnabled"] = strconv.FormatBool(common.AutomaticDisableChannelEnabled)
 	common.OptionMap["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.AutomaticEnableChannelEnabled)
 	common.OptionMap["CatalogAutoDraftEnabled"] = "true"
+	common.OptionMap["OnboardingIgnoredModels"] = "[]"
 	common.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.LogConsumeEnabled)
 	common.OptionMap["DisplayInCurrencyEnabled"] = strconv.FormatBool(common.DisplayInCurrencyEnabled)
 	common.OptionMap["DisplayTokenStatEnabled"] = strconv.FormatBool(common.DisplayTokenStatEnabled)
@@ -223,6 +233,19 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
+	}
+	if key == "OnboardingIgnoredModels" {
+		return validateIgnoredModelsJSON(value)
+	}
+	return nil
+}
+
+// validateIgnoredModelsJSON 校验忽略名单 option 值:必须是合法 JSON 字符串数组。
+// 存的是纯字符串,读取处(model.GetOption + service 解析)自行解析。
+func validateIgnoredModelsJSON(value string) error {
+	var names []string
+	if err := common.UnmarshalJsonStr(value, &names); err != nil {
+		return fmt.Errorf("OnboardingIgnoredModels 必须是 JSON 字符串数组: %w", err)
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -132,6 +133,21 @@ func GetAllCanvasCatalogModelsAdmin() ([]CanvasCatalogModel, error) {
 func GetCanvasCatalogModelByID(id int) (*CanvasCatalogModel, error) {
 	var m CanvasCatalogModel
 	if err := DB.First(&m, id).Error; err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// GetCanvasCatalogModelByRemoteID 按 remote_id 查目录条目。未找到返回 (nil, nil) ——
+// 与 GetModelGroupPrice 的"未配置不是 error"语义一致。工作台开闸时按
+// remote_id=模型名 定位目录条目用。
+func GetCanvasCatalogModelByRemoteID(remoteID string) (*CanvasCatalogModel, error) {
+	var m CanvasCatalogModel
+	err := DB.Where("remote_id = ?", remoteID).First(&m).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	return &m, nil
