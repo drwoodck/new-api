@@ -40,6 +40,8 @@ export type CanvasCatalogModel = {
   // GetAllCanvasCatalogModelsAdmin 直接 marshal 这个 struct,该字段 Go 侧
   // 早已存在(见 controller/canvas_catalog.go 的 GroupVisible),这里之前漏加。
   group_visible?: boolean
+  /** pricing 文案来源:auto = 后端按计费真源生成;custom = 管理员手填。 */
+  pricing_source?: 'auto' | 'custom'
 }
 
 // 对应 Go 端 controller.canvasCatalogOverviewRow (controller/canvas_catalog_admin.go)。

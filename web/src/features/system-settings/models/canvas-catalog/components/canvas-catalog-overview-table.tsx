@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Pencil, Settings2, Trash2 } from 'lucide-react'
+import { DollarSign, Pencil, Settings2, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { BadgeCell } from '@/components/data-table/core/badge-cell'
@@ -35,6 +35,8 @@ type CanvasCatalogOverviewTableProps = {
   onConfigure: (row: CanvasCatalogOverviewRow) => void
   onEdit: (row: CanvasCatalogOverviewRow) => void
   onDelete: (row: CanvasCatalogOverviewRow) => void
+  // 跳转到模型管理页的定价编辑入口(带 highlight 定位)。
+  onGoPricing: (row: CanvasCatalogOverviewRow) => void
 }
 
 function formatGroupPrice(t: (key: string) => string, price: number | null) {
@@ -136,37 +138,48 @@ export function CanvasCatalogOverviewTable(
           header: t('操作'),
           className: 'text-right',
           cellClassName: 'text-right',
-          cell: (r) =>
-            props.mode === 'unconfigured' ? (
+          cell: (r) => (
+            <div className='flex justify-end gap-1'>
               <Button
-                variant='outline'
-                size='sm'
-                onClick={() => props.onConfigure(r)}
+                variant='ghost'
+                size='icon-sm'
+                onClick={() => props.onGoPricing(r)}
+                aria-label={t('去定价')}
               >
-                <Settings2 className='mr-1.5 h-3.5 w-3.5' />
-                {t('配置画布参数')}
+                <DollarSign />
               </Button>
-            ) : (
-              <div className='flex justify-end gap-1'>
+              {props.mode === 'unconfigured' ? (
                 <Button
-                  variant='ghost'
-                  size='icon-sm'
-                  onClick={() => props.onEdit(r)}
-                  aria-label={t('编辑')}
+                  variant='outline'
+                  size='sm'
+                  onClick={() => props.onConfigure(r)}
                 >
-                  <Pencil />
+                  <Settings2 className='mr-1.5 h-3.5 w-3.5' />
+                  {t('配置画布参数')}
                 </Button>
-                <Button
-                  variant='ghost'
-                  size='icon-sm'
-                  onClick={() => props.onDelete(r)}
-                  aria-label={t('删除')}
-                  className='text-destructive hover:text-destructive'
-                >
-                  <Trash2 />
-                </Button>
-              </div>
-            ),
+              ) : (
+                <>
+                  <Button
+                    variant='ghost'
+                    size='icon-sm'
+                    onClick={() => props.onEdit(r)}
+                    aria-label={t('编辑')}
+                  >
+                    <Pencil />
+                  </Button>
+                  <Button
+                    variant='ghost'
+                    size='icon-sm'
+                    onClick={() => props.onDelete(r)}
+                    aria-label={t('删除')}
+                    className='text-destructive hover:text-destructive'
+                  >
+                    <Trash2 />
+                  </Button>
+                </>
+              )}
+            </div>
+          ),
         },
       ]}
     />

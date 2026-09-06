@@ -38,6 +38,8 @@ const modelsSearchSchema = z.object({
   dPageSize: z.number().optional().catch(10),
   dFilter: z.string().optional().catch(''),
   dStatus: z.array(z.string()).optional().catch([]),
+  // 从目录/审核卡 deep-link 过来的模型名,ModelsTable 消费后自动打开编辑抽屉。
+  highlight: z.string().optional(),
 })
 
 export const Route = createFileRoute('/_authenticated/models/$section')({

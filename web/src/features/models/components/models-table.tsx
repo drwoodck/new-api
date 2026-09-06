@@ -18,8 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { DataTablePage, useDataTable } from '@/components/data-table'
 import { useMediaQuery } from '@/hooks'
@@ -40,7 +41,7 @@ const route = getRouteApi('/_authenticated/models/$section')
 
 export function ModelsTable() {
   const { t } = useTranslation()
-  const { selectedVendor } = useModels()
+  const { selectedVendor, setCurrentRow, setOpen } = useModels()
   const isMobile = useMediaQuery('(max-width: 640px)')
 
   // URL state management
@@ -147,9 +148,38 @@ export function ModelsTable() {
     },
   })
 
-  const models = data?.data?.items || []
+  // 用 useMemo 固定引用:data 未到时 `?? []` 也不随每次渲染新建数组,
+  // 让下面 highlight 的 useEffect 依赖稳定(exhaustive-deps 要求)。
+  const models = useMemo(() => data?.data?.items ?? [], [data])
   const totalCount = data?.data?.total || 0
   const vendorCounts = data?.data?.vendor_counts
+
+  // ?highlight=<model_name> deep-link:找到当前页该行就自动打开编辑抽屉;
+  // 找不到(不在当前页/被过滤)就提示翻页或搜索,不做跨页自动定位(最小改动)。
+  // 消费后从 URL 清除,避免刷新/重挂载时重复弹抽屉。
+  const highlight = route.useSearch().highlight
+  const consumedHighlightRef = useRef<string | null>(null)
+  const navigate = route.useNavigate()
+
+  useEffect(() => {
+    if (!highlight || consumedHighlightRef.current === highlight) return
+    const found = models.find((m) => m.model_name === highlight)
+    if (found) {
+      consumedHighlightRef.current = highlight
+      setCurrentRow(found)
+      setOpen('update-model')
+    } else if (!isLoading) {
+      consumedHighlightRef.current = highlight
+      toast.error(
+        t('模型 {{name}} 不在当前列表页,请搜索后打开', { name: highlight })
+      )
+    } else {
+      return // 数据还没到,等 models 变化后重跑
+    }
+    navigate({
+      search: (prev) => ({ ...prev, highlight: undefined }),
+    })
+  }, [highlight, models, isLoading, setCurrentRow, setOpen, t, navigate])
 
   // Columns configuration
   const columns = useModelsColumns(vendors)

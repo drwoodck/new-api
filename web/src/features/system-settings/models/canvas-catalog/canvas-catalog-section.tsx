@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useNavigate } from '@tanstack/react-router'
 import { Plus } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -29,10 +30,37 @@ import { CanvasCatalogFormDialog } from './components/canvas-catalog-form-dialog
 import { CanvasCatalogOverviewTable } from './components/canvas-catalog-overview-table'
 import { useDeleteCanvasCatalogModel } from './hooks/use-canvas-catalog-mutations'
 import { useCanvasCatalogOverview } from './hooks/use-canvas-catalog'
-import type { CanvasCatalogOverviewRow } from './types'
+import type {
+  CanvasCatalogOverviewGroupPrice,
+  CanvasCatalogOverviewRow,
+} from './types'
+
+// 编辑对话框「当前计费(自动文案)」预览行的拼装:单分组一行「分组名: 值」,
+// 值优先取分别定价的标量价,其次档表(档表 ×N),都没有才算未配置;
+// 多分组用「 · 」连接。文案与 overview 表的徽标口径一致,数据源都是
+// overview 行的 group_prices(编辑对话框内部经 GET :id 拿全量条目但不含该列)。
+function groupPriceValue(
+  gp: CanvasCatalogOverviewGroupPrice,
+  t: (key: string) => string
+): string {
+  if (gp.price != null) return String(gp.price)
+  const tierCount = gp.price_tiers?.length ?? 0
+  if (tierCount > 0) return `${t('档表')}×${tierCount}`
+  return t('未配置')
+}
+
+function buildEffectivePriceSummary(
+  row: CanvasCatalogOverviewRow,
+  t: (key: string) => string
+): string {
+  return row.group_prices
+    .map((gp) => `${gp.group_name}: ${groupPriceValue(gp, t)}`)
+    .join(' · ')
+}
 
 export function CanvasCatalogSection() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const { data: overviewRows = [], isLoading } = useCanvasCatalogOverview()
   const deleteModel = useDeleteCanvasCatalogModel()
 
@@ -89,6 +117,29 @@ export function CanvasCatalogSection() {
     setDeleteTarget(null)
   }
 
+  // 「去定价」→ 模型管理页 metadata 分区,highlight=该模型名自动打开编辑抽屉。
+  const handleGoPricing = (row: CanvasCatalogOverviewRow) => {
+    void navigate({
+      to: '/models/$section',
+      params: { section: 'metadata' },
+      search: { highlight: row.model_name },
+    })
+  }
+
+  // 编辑对话框的「当前计费(自动文案)」预览:从 overview 行拼一行摘要,
+  // 不新拉接口。新建(无 editingId/prefillRemoteId)或该行没有分组价格时
+  // 返回 undefined,对话框内不渲染预览块。
+  const effectivePriceSummary = useMemo(() => {
+    let row: CanvasCatalogOverviewRow | undefined
+    if (editingId != null) {
+      row = overviewRows.find((r) => r.catalog_id === editingId)
+    } else if (prefillRemoteId) {
+      row = overviewRows.find((r) => r.model_name === prefillRemoteId)
+    }
+    if (!row || row.group_prices.length === 0) return undefined
+    return buildEffectivePriceSummary(row, t)
+  }, [editingId, prefillRemoteId, overviewRows, t])
+
   if (isLoading) {
     return (
       <SettingsSection title={t('画布模型目录')}>
@@ -128,6 +179,7 @@ export function CanvasCatalogSection() {
             onConfigure={handleConfigure}
             onEdit={handleEdit}
             onDelete={(row) => setDeleteTarget(row)}
+            onGoPricing={handleGoPricing}
           />
         </TabsContent>
 
@@ -144,6 +196,7 @@ export function CanvasCatalogSection() {
             onConfigure={handleConfigure}
             onEdit={handleEdit}
             onDelete={(row) => setDeleteTarget(row)}
+            onGoPricing={handleGoPricing}
           />
         </TabsContent>
       </Tabs>
@@ -153,6 +206,7 @@ export function CanvasCatalogSection() {
         onOpenChange={handleDialogChange}
         editingId={editingId}
         prefillRemoteId={prefillRemoteId}
+        effectivePriceSummary={effectivePriceSummary}
       />
 
       <ConfirmDialog

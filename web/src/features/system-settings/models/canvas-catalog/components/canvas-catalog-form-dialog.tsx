@@ -68,6 +68,10 @@ type CanvasCatalogFormDialogProps = {
   // the admin to retype and risk a typo that silently creates an unrelated
   // entry instead of configuring this one.
   prefillRemoteId?: string
+  // 「当前计费(自动文案)」预览行:由调用方从 overview 行的 group_prices 拼好
+  // 传入(该行口径),空/undefined 时不渲染。对话框内部 GET :id 拿到的全量
+  // 条目不含分别定价数据,所以不在此处新拉接口。
+  effectivePriceSummary?: string
 }
 
 const FORM_ID = 'canvas-catalog-mutate-form'
@@ -134,6 +138,7 @@ export function CanvasCatalogFormDialog({
   onOpenChange,
   editingId,
   prefillRemoteId,
+  effectivePriceSummary,
 }: CanvasCatalogFormDialogProps) {
   const { t } = useTranslation()
   const isEdit = Boolean(editingId)
@@ -476,12 +481,37 @@ export function CanvasCatalogFormDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>{t('价格')}</FormLabel>
+                  {effectivePriceSummary ? (
+                    <div className='text-muted-foreground rounded-md border px-3 py-2 text-sm'>
+                      <div className='font-medium'>
+                        {t('当前计费(自动文案)')}
+                      </div>
+                      <div className='whitespace-pre-wrap'>
+                        {effectivePriceSummary}
+                      </div>
+                    </div>
+                  ) : null}
                   <FormControl>
                     <Input placeholder='2.8元/条' {...field} />
                   </FormControl>
                   <FormDescription>
                     {t(
                       '展示给画布用户的价格文案;留空时客户端按分组价格自动展示'
+                    )}
+                    <Link
+                      to='/models/$section'
+                      params={{ section: 'metadata' }}
+                      search={{
+                        highlight: form.watch('remote_id') || undefined,
+                      }}
+                      className='text-primary ml-1 hover:underline'
+                    >
+                      {t('去模型管理页定价')}
+                    </Link>
+                  </FormDescription>
+                  <FormDescription>
+                    {t(
+                      '留空 = 使用自动文案(随计费配置自动更新);填写 = 手动覆盖'
                     )}
                   </FormDescription>
                   <FormMessage />
