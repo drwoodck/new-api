@@ -5563,6 +5563,26 @@
     "去模型管理页": "Go to model management",
     "成功开闸 {{count}} 个模型": "Successfully launched {{count}} model(s)",
     "已加入忽略名单": "Added to ignore list",
-    "开闸失败": "Launch failed"
+    "开闸失败": "Launch failed",
+    "已上线模型更新": "Live model updates",
+    "从指定渠道拉取上游定价并覆盖本地已上线模型的定价配置;分组独立价与目录手填定价不受影响。": "Fetch upstream pricing from the selected channel and overwrite the pricing of live local models. Group-specific prices and catalog manual pricing are not touched.",
+    "渠道": "Channel",
+    "选择渠道": "Select a channel",
+    "一行一个模型名,留空表示同步全部已配置模型": "One model name per line. Leave empty to sync all configured models.",
+    "拉取预览": "Fetch preview",
+    "拉取中...": "Fetching...",
+    "一键更新": "Update now",
+    "同步中...": "Syncing...",
+    "预览": "Preview",
+    "共 {{count}} 个模型": "{{count}} model(s) in total",
+    "按次": "Per-call",
+    "按量": "Usage-based",
+    "可疑": "Suspicious",
+    "数值可疑,请人工复核": "Suspicious values, please review manually",
+    "已跳过": "Skipped",
+    "无变更": "No changes",
+    "同步失败": "Sync failed",
+    "上游没有返回可同步的模型条目": "The upstream returned no syncable model entries",
+    "更新成功:共更新 {{count}} 个模型": "Update succeeded: {{count}} model(s) updated"
 }
 }

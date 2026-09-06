@@ -25,6 +25,8 @@ import type {
   OnboardingLaunchResult,
   OnboardingOverview,
   OnboardingPrefetchResult,
+  OnboardingSyncParams,
+  OnboardingSyncResultPayload,
 } from './types'
 
 /** GET /api/onboarding/overview —— 工作台三列待办的聚合。 */
@@ -64,5 +66,16 @@ export async function prefetchOnboardingPricing(
     params.model_names = modelNames.join(',')
   }
   const res = await api.get('/api/onboarding/prefetch', { params })
+  return res.data
+}
+
+/**
+ * POST /api/onboarding/sync_from_upstream —— 一键同步:拉上游 → 逐模型逐字段
+ * 应用到本地定价,响应 {results, errors}。分组独立价与目录手填 pricing 不碰。
+ */
+export async function syncOnboardingFromUpstream(
+  params: OnboardingSyncParams
+): Promise<OnboardingApiResponse<OnboardingSyncResultPayload>> {
+  const res = await api.post('/api/onboarding/sync_from_upstream', params)
   return res.data
 }

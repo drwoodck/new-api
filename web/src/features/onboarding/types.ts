@@ -131,6 +131,13 @@ export interface OnboardingSyncError {
   error: string
 }
 
+// POST /api/onboarding/sync_from_upstream body。model_names 空/缺省 = 同步
+// 该渠道全部已返回的模型条目(后端按字典序处理)。
+export interface OnboardingSyncParams {
+  channel_id: number
+  model_names?: string[]
+}
+
 // POST /api/onboarding/sync_from_upstream 响应 data。
 export interface OnboardingSyncResultPayload {
   results: OnboardingSyncResult[]

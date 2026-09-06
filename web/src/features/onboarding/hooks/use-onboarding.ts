@@ -24,12 +24,15 @@ import {
   fetchOnboardingOverview,
   ignoreOnboardingModels,
   launchOnboardingModels,
+  syncOnboardingFromUpstream,
 } from '../api'
 import type {
   OnboardingApiResponse,
   OnboardingIgnoreResult,
   OnboardingLaunchParams,
   OnboardingLaunchResult,
+  OnboardingSyncParams,
+  OnboardingSyncResultPayload,
 } from '../types'
 
 /** React Query cache keys for the onboarding workbench. */
@@ -105,6 +108,34 @@ export function useIgnoreOnboardingModels() {
     },
     onError: (error: Error) => {
       toast.error(error.message || i18next.t('操作失败'))
+    },
+  })
+}
+
+/**
+ * 一键同步:按实际落盘字段计数(有 applied 的模型才算「更新」),toast 汇报
+ * 后 invalidate overview —— 同步可能补齐定价,待定价列会随之缩短。逐模型
+ * 的 applied/skipped/errors 明细由面板读取响应渲染,这里不弹逐条提示。
+ */
+export function useSyncOnboardingFromUpstream() {
+  const { invalidate } = useOnboardingInvalidate()
+  return useMutation({
+    mutationFn: (params: OnboardingSyncParams) =>
+      syncOnboardingFromUpstream(params),
+    onSuccess: (res: OnboardingApiResponse<OnboardingSyncResultPayload>) => {
+      if (res.success) {
+        const updated = (res.data?.results ?? []).filter(
+          (item) => item.applied.length > 0
+        ).length
+        toast.success(
+          i18next.t('更新成功:共更新 {{count}} 个模型', { count: updated })
+        )
+        invalidate()
+      }
+      // 业务失败(channel_id 非法 / 拉上游失败)由 http-client 拦截器统一 toast。
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || i18next.t('同步失败'))
     },
   })
 }

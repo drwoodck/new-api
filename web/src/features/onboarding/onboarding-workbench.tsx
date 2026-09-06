@@ -25,6 +25,7 @@ import { StatusBadge } from '@/components/status-badge'
 
 import { GoModelManagementButton, GoPriceButton } from './components/go-buttons'
 import { LaunchCard } from './components/launch-card'
+import { SyncFromUpstream } from './components/sync-from-upstream'
 import { WorkbenchColumn } from './components/workbench-column'
 import {
   useIgnoreOnboardingModels,
@@ -34,7 +35,8 @@ import {
 
 /**
  * 上新工作台:三列聚合(missing_meta 名字列表 / unpriced 名字列表 /
- * draft_catalog 审核卡列表)。开闸与忽略 mutation 成功后由 hooks 统一
+ * draft_catalog 审核卡列表)+ 第四块「已上线模型更新」同步面板
+ * (SyncFromUpstream)。开闸与忽略 mutation 成功后由 hooks 统一
  * toast + invalidate overview。
  *
  * 强制开闸语义(与后端 controller.LaunchOnboardingModels 对齐):
@@ -194,6 +196,9 @@ export function OnboardingWorkbench() {
           ))}
         </WorkbenchColumn>
       </div>
+
+      {/* 第四块:已上线模型更新(一键同步上游定价) */}
+      <SyncFromUpstream />
 
       {/* 批量开闸的 force 二次确认 */}
       <ConfirmDialog
