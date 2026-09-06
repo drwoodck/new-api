@@ -16,30 +16,34 @@ import (
 )
 
 type Pricing struct {
-	ModelName              string                  `json:"model_name"`
-	Description            string                  `json:"description,omitempty"`
-	Icon                   string                  `json:"icon,omitempty"`
-	Tags                   string                  `json:"tags,omitempty"`
-	VendorID               int                     `json:"vendor_id,omitempty"`
-	QuotaType              int                     `json:"quota_type"`
-	ModelRatio             float64                 `json:"model_ratio"`
-	ModelPrice             float64                 `json:"model_price"`
-	OwnerBy                string                  `json:"owner_by"`
-	CompletionRatio        float64                 `json:"completion_ratio"`
-	CacheRatio             *float64                `json:"cache_ratio,omitempty"`
-	CreateCacheRatio       *float64                `json:"create_cache_ratio,omitempty"`
-	ImageRatio             *float64                `json:"image_ratio,omitempty"`
-	VideoSecondPrice       *float64                `json:"video_second_price,omitempty"`
+	ModelName        string   `json:"model_name"`
+	Description      string   `json:"description,omitempty"`
+	Icon             string   `json:"icon,omitempty"`
+	Tags             string   `json:"tags,omitempty"`
+	VendorID         int      `json:"vendor_id,omitempty"`
+	QuotaType        int      `json:"quota_type"`
+	ModelRatio       float64  `json:"model_ratio"`
+	ModelPrice       float64  `json:"model_price"`
+	OwnerBy          string   `json:"owner_by"`
+	CompletionRatio  float64  `json:"completion_ratio"`
+	CacheRatio       *float64 `json:"cache_ratio,omitempty"`
+	CreateCacheRatio *float64 `json:"create_cache_ratio,omitempty"`
+	ImageRatio       *float64 `json:"image_ratio,omitempty"`
+	VideoSecondPrice *float64 `json:"video_second_price,omitempty"`
 	// PriceTiers 模型的档位表（统一模式全局档表，原价）。分别定价模式的行内
 	// 档表不在此下发 —— 目录接口按调用者分组返回对应档表。
-	PriceTiers             *types.PriceTierList     `json:"price_tiers,omitempty"`
-	AudioRatio             *float64                 `json:"audio_ratio,omitempty"`
-	AudioCompletionRatio   *float64                `json:"audio_completion_ratio,omitempty"`
-	EnableGroup            []string                `json:"enable_groups"`
-	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
-	BillingMode            string                  `json:"billing_mode,omitempty"`
-	BillingExpr            string                  `json:"billing_expr,omitempty"`
-	PricingVersion         string                  `json:"pricing_version,omitempty"`
+	PriceTiers *types.PriceTierList `json:"price_tiers,omitempty"`
+	// InputMaterialPrices 模型的全局输入素材价表(原价,统一模式)。分别定价
+	// 模式不下发 —— 与 PriceTiers 同规则,价格随目录接口按调用者分组返回。
+	// 下游中转站可据此预填素材计费(2026-09-04 spec 3.1 对称输出)。
+	InputMaterialPrices    *types.InputMaterialPriceList `json:"input_material_prices,omitempty"`
+	AudioRatio             *float64                      `json:"audio_ratio,omitempty"`
+	AudioCompletionRatio   *float64                      `json:"audio_completion_ratio,omitempty"`
+	EnableGroup            []string                      `json:"enable_groups"`
+	SupportedEndpointTypes []constant.EndpointType       `json:"supported_endpoint_types"`
+	BillingMode            string                        `json:"billing_mode,omitempty"`
+	BillingExpr            string                        `json:"billing_expr,omitempty"`
+	PricingVersion         string                        `json:"pricing_version,omitempty"`
 }
 
 type PricingVendor struct {
@@ -180,6 +184,18 @@ func appendPricingEndpoint(endpoints []string, endpoint string) []string {
 		return endpoints
 	}
 	return append(endpoints, endpoint)
+}
+
+// applyMaterialPricingToPricing 把全局素材价表挂到 /api/pricing 条目上。
+// 分别定价模式不下发(与全局档表同规则)。
+func applyMaterialPricingToPricing(p *Pricing, modelName string) {
+	if IsGroupPricingEnabled(modelName) {
+		return
+	}
+	if list, ok := ratio_setting.GetInputMaterialPrices(modelName); ok {
+		l := list // 拷贝切片头,避免与 RWMap 内部共享可变引用
+		p.InputMaterialPrices = &l
+	}
 }
 
 func updatePricing() {
@@ -415,6 +431,7 @@ func updatePricing() {
 			pricing.ModelPrice = 0
 			pricing.VideoSecondPrice = nil
 		}
+		applyMaterialPricingToPricing(&pricing, model)
 		if ratio_setting.ContainsAudioRatio(model) {
 			audioRatio := ratio_setting.GetAudioRatio(model)
 			pricing.AudioRatio = &audioRatio
