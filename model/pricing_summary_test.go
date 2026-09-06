@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/types"
 )
 
 // restoreRatioSettings 快照全部参与换算的全局定价表,测试结束后恢复,
@@ -32,8 +33,9 @@ func restoreRatioSettings(t *testing.T) {
 }
 
 // TestGeneratePricingSummaryPreloaded 覆盖 GeneratePricingSummaryPreloaded 全部分支:
-// 未定价、token 倍率、按次固定价、统一/行内秒价、档表、素材价追加(含 0 价显式免费)、
-// 分别定价行缺失。全部用全局 option 表 + 内存行驱动,不依赖 DB。
+// 显式 0 价免费(标量/倍率/素材)、token 倍率、按次固定价、统一/行内秒价、档表
+// (全局与行内)、素材价追加、分别定价行缺失。全部用全局 option 表 + 内存行驱动,
+// 不依赖 DB。
 func TestGeneratePricingSummaryPreloaded(t *testing.T) {
 	tests := []struct {
 		name                string
@@ -43,11 +45,12 @@ func TestGeneratePricingSummaryPreloaded(t *testing.T) {
 		want                string
 	}{
 		{
-			name: "未定价",
+			name: "统一模式ratio显式0免费",
 			setup: func(t *testing.T) {
 				require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"sum-model":0}`))
 			},
-			want: "未定价",
+			// ratio 0 是显式配置的免费,与「未配置」区分。
+			want: "免费",
 		},
 		{
 			name: "token倍率",
@@ -65,6 +68,14 @@ func TestGeneratePricingSummaryPreloaded(t *testing.T) {
 				require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"sum-model":0.02}`))
 			},
 			want: "$0.02/次",
+		},
+		{
+			name: "按次固定价0免费",
+			setup: func(t *testing.T) {
+				require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"sum-model":0}`))
+			},
+			// 显式 0 固定价 = 免费,与素材段 0 价口径一致。
+			want: "免费",
 		},
 		{
 			name: "统一秒价",
@@ -89,13 +100,24 @@ func TestGeneratePricingSummaryPreloaded(t *testing.T) {
 			want: "档表:5秒 $0.05/秒 · 10秒 $0.08/秒",
 		},
 		{
-			name: "未定价+素材价",
+			name: "分别定价行内档表",
+			row: &ModelGroupPrice{PriceTiers: &types.PriceTierList{
+				{Label: "5秒", TierType: types.TierTypeRequest, Key: "5s", BillingUnit: types.BillingUnitSecond, Price: 0.05},
+				{Label: "10秒", TierType: types.TierTypeRequest, Key: "10s", BillingUnit: types.BillingUnitSecond, Price: 0.08},
+			}},
+			groupPricingEnabled: true,
+			// 行内档表就是终价,直接复用调用方行,不查 DB、不叠乘倍率。
+			want: "档表:5秒 $0.05/秒 · 10秒 $0.08/秒",
+		},
+		{
+			name: "免费+素材价",
 			setup: func(t *testing.T) {
 				require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"sum-model":0}`))
 				require.NoError(t, ratio_setting.UpdateInputMaterialPricesByJSONString(`{"sum-model":[
 					{"material_type":"image","price_per_unit":0.01}]}`))
 			},
-			want: "未定价 · 输入图 $0.01/张",
+			// 显式 0 倍率 → 「免费」,素材段照常追加。
+			want: "免费 · 输入图 $0.01/张",
 		},
 		{
 			name: "按次+素材价",

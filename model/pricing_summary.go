@@ -41,8 +41,28 @@ func GeneratePricingSummaryPreloaded(modelName, groupName string, groupPricingEn
 	var parts []string
 
 	// 1) 档表(终价,已含分组倍率):逐档列出。
-	if tierTable, err := ResolveGroupTierTable(modelName, groupName); err == nil && tierTable != nil && tierTable.PriceTiers != nil {
-		parts = append(parts, formatTierTable(*tierTable.PriceTiers))
+	//    分别定价模式直接复用调用方已查好的行内档表(行内档价本就是终价,
+	//    GroupRatioApplied=1,与 ResolveGroupTierTableFromPreloaded 行内分支
+	//    语义逐字一致,零 DB 查询);行缺失或行内无档表 → nil,不回退全局档表
+	//    (未覆盖即不可用的闸门语义)。统一模式走全局档表 ×GroupRatio 换算。
+	var tierTable *GroupTierTable
+	if groupPricingEnabled {
+		if row != nil && row.PriceTiers != nil {
+			tierTable = &GroupTierTable{PriceTiers: row.PriceTiers, GroupRatioApplied: 1}
+		}
+	} else if t, err := ResolveGroupTierTable(modelName, groupName); err == nil {
+		tierTable = t
+	}
+	if tierTable != nil && tierTable.PriceTiers != nil {
+		var tierParts []string
+		for _, tier := range *tierTable.PriceTiers {
+			unit := "/秒"
+			if tier.BillingUnit == types.BillingUnitRequest {
+				unit = "/次"
+			}
+			tierParts = append(tierParts, fmt.Sprintf("%s $%s%s", tier.Label, formatPrice(tier.Price), unit))
+		}
+		parts = append(parts, "档表:"+strings.Join(tierParts, " · "))
 	} else if secondPrice, ok := ResolveVideoSecondPriceForGroup(modelName, groupName, groupPricingEnabled, row); ok {
 		// 2) 秒价(行内为终价;统一模式为原价 —— 统一模式文案不带倍率,
 		//    与 /api/pricing 的 VideoSecondPrice 展示口径一致)。
@@ -73,34 +93,24 @@ func formatPrice(price float64) string {
 }
 
 // formatScalar 输出统一模式/分别定价的标量价格段。
-// QuotaType 1(按次/按量固定价)→ "$X/次";
+// QuotaType 1(按次/按量固定价)→ 显式 0 输出「免费」,否则 "$X/次";
 // QuotaType 0(按 token 倍率)→ "$X/1K 输入 · $Y/1K 输出",
 // 输入价 = ModelRatio × 2 / 1e6 × 1000(1 ratio = $2/1M tokens,展示口径 /1K),
-// 输出价 = 输入价 × CompletionRatio。倍率为 0 且无价 → 「未定价」。
+// 输出价 = 输入价 × CompletionRatio。显式 0 倍率输出「免费」(0 是显式配置的
+// 免费,与「未配置」区分)。
 func formatScalar(resolved ResolvedGroupPrice) string {
 	if resolved.QuotaType == 1 {
+		if resolved.ModelPrice == 0 {
+			return "免费"
+		}
 		return fmt.Sprintf("$%s/次", formatPrice(resolved.ModelPrice))
 	}
 	inputPrice := resolved.ModelRatio * 2 / 1e6 * 1000
 	if inputPrice <= 0 {
-		return pricingUnavailable
+		return "免费"
 	}
 	outputPrice := inputPrice * resolved.CompletionRatio
 	return fmt.Sprintf("$%s/1K 输入 · $%s/1K 输出", formatPrice(inputPrice), formatPrice(outputPrice))
-}
-
-// formatTierTable 输出档表段:前缀「档表:」,每档「label $price/unit」,
-// 档间用「 · 」分隔。unit 由 BillingUnit 决定:second → "/秒"、request → "/次"。
-func formatTierTable(tiers types.PriceTierList) string {
-	parts := make([]string, 0, len(tiers))
-	for _, tier := range tiers {
-		unit := "/秒"
-		if tier.BillingUnit == types.BillingUnitRequest {
-			unit = "/次"
-		}
-		parts = append(parts, fmt.Sprintf("%s $%s%s", tier.Label, formatPrice(tier.Price), unit))
-	}
-	return "档表:" + strings.Join(parts, " · ")
 }
 
 // formatMaterialPrices 输出素材价段:每类素材一段,段间「 · 」分隔。
