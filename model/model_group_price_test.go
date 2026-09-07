@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/types"
 )
 
 // setupModelGroupPriceTestDB 给每个测试一个独立的内存库,同 canvas_catalog_test.go
@@ -122,6 +123,82 @@ func TestDeleteModelGroupPricesByModel(t *testing.T) {
 	rows, err := GetModelGroupPrices("m1")
 	require.NoError(t, err)
 	assert.Empty(t, rows)
+}
+
+func TestReplaceModelGroupPricesRejectsTiersAndSecondPriceConflict(t *testing.T) {
+	setupModelGroupPriceTestDB(t)
+
+	// 档表和行内秒价同时配置应该报错
+	tiers := types.PriceTierList{
+		{Label: "标清", TierType: "resolution", Key: "480p", BillingUnit: "request", Price: 0.01},
+		{Label: "高清", TierType: "resolution", Key: "1080p", BillingUnit: "request", Price: 0.02},
+	}
+	secondPrice := 0.002
+
+	err := ReplaceModelGroupPrices("m1", []ModelGroupPrice{
+		{
+			GroupName:        "default",
+			PriceTiers:       &tiers,
+			VideoSecondPrice: &secondPrice,
+		},
+	})
+
+	require.Error(t, err, "档表和行内秒价同时配置应该报错")
+	assert.Contains(t, err.Error(), "档表定价(price_tiers)和行内秒价(video_second_price)不能同时配置")
+	assert.Contains(t, err.Error(), "default")
+
+	// 验证没有保存任何数据
+	rows, err := GetModelGroupPrices("m1")
+	require.NoError(t, err)
+	assert.Empty(t, rows, "失败的配置不应该保存任何数据")
+}
+
+func TestReplaceModelGroupPricesAllowsTiersOnly(t *testing.T) {
+	setupModelGroupPriceTestDB(t)
+
+	// 只配置档表应该成功
+	tiers := types.PriceTierList{
+		{Label: "标清", TierType: "resolution", Key: "480p", BillingUnit: "request", Price: 0.01},
+		{Label: "高清", TierType: "resolution", Key: "1080p", BillingUnit: "request", Price: 0.02},
+	}
+
+	err := ReplaceModelGroupPrices("m1", []ModelGroupPrice{
+		{
+			GroupName:  "default",
+			PriceTiers: &tiers,
+		},
+	})
+
+	require.NoError(t, err)
+
+	rows, err := GetModelGroupPrices("m1")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.NotNil(t, rows[0].PriceTiers)
+	assert.Nil(t, rows[0].VideoSecondPrice)
+}
+
+func TestReplaceModelGroupPricesAllowsSecondPriceOnly(t *testing.T) {
+	setupModelGroupPriceTestDB(t)
+
+	// 只配置行内秒价应该成功
+	secondPrice := 0.002
+
+	err := ReplaceModelGroupPrices("m1", []ModelGroupPrice{
+		{
+			GroupName:        "default",
+			VideoSecondPrice: &secondPrice,
+		},
+	})
+
+	require.NoError(t, err)
+
+	rows, err := GetModelGroupPrices("m1")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Nil(t, rows[0].PriceTiers)
+	assert.NotNil(t, rows[0].VideoSecondPrice)
+	assert.Equal(t, 0.002, *rows[0].VideoSecondPrice)
 }
 
 // --- ResolveGroupPrice ---

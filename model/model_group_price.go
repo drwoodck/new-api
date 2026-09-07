@@ -110,6 +110,14 @@ func GetAllModelGroupPrices() (map[string]map[string]ModelGroupPrice, error) {
 // 任一行的档表非法即整体拒绝(不部分生效)。
 func ReplaceModelGroupPrices(modelName string, rows []ModelGroupPrice) error {
 	for i := range rows {
+		// 校验：拒绝档表(price_tiers)和行内秒价(video_second_price)同时配置
+		// 这是死配置 - 两者同时存在会导致计费逻辑混乱，必须二选一
+		if rows[i].PriceTiers != nil && len(*rows[i].PriceTiers) > 0 &&
+			rows[i].VideoSecondPrice != nil && *rows[i].VideoSecondPrice > 0 {
+			return fmt.Errorf("分组 %s: 档表定价(price_tiers)和行内秒价(video_second_price)不能同时配置，请二选一",
+				rows[i].GroupName)
+		}
+
 		if rows[i].PriceTiers != nil {
 			normalized, err := types.NormalizePriceTierList(*rows[i].PriceTiers)
 			if err != nil {
