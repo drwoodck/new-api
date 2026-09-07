@@ -103,6 +103,7 @@ func DraftCatalogEntries(channel *model.Channel, addedModels []string) (drafted 
 		}
 		if created {
 			drafted++
+			common.SysLog(fmt.Sprintf("画布目录自动起草成功: channel_id=%d model=%s (已创建models表记录status=0)", channel.Id, name))
 		}
 	}
 	return drafted, nil
