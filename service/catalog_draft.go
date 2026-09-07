@@ -246,72 +246,158 @@ type upstreamModelInfo struct {
 	NameRule    int    `json:"name_rule"`
 }
 
-// channelModelInfo 从渠道 API 返回的模型信息
+// channelModelInfo 从渠道 API 返回的模型信息（合并自 /api/pricing 和 /api/media-models/catalog）
 type channelModelInfo struct {
-	ID          string   `json:"id"`
-	Object      string   `json:"object"`
-	Created     int64    `json:"created"`
-	OwnedBy     string   `json:"owned_by"`
-	Description string   `json:"description"`
-	Capabilities []string `json:"capabilities"`
-}
-
-// channelModelsResponse 渠道 /v1/models 接口的响应
-type channelModelsResponse struct {
-	Object string             `json:"object"`
-	Data   []channelModelInfo `json:"data"`
+	ModelName   string  `json:"model_name"`
+	Description string  `json:"description"`
+	Icon        string  `json:"icon"`
+	VendorName  string  `json:"vendor_name"`
+	Tags        string  `json:"tags"`
+	ModelRatio  float64 `json:"model_ratio"`
+	ModelPrice  float64 `json:"model_price"`
 }
 
 // fetchChannelModelInfo 从渠道 API 获取单个模型的信息
+// 优先从 /api/pricing 获取（包含描述、图标、供应商等完整信息）
+// 如果失败，尝试从 /api/media-models/catalog 获取（媒体模型目录）
 func fetchChannelModelInfo(channel *model.Channel, modelName string) (*channelModelInfo, error) {
 	if channel == nil {
 		return nil, fmt.Errorf("channel is nil")
 	}
 
-	// 构建请求 URL: baseURL + /v1/models
 	baseURL := strings.TrimRight(channel.GetBaseURL(), "/")
-	modelsURL := fmt.Sprintf("%s/v1/models", baseURL)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("GET", modelsURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	// 尝试从 /api/pricing 获取（text/embedding 模型）
+	if info := fetchFromPricingEndpoint(baseURL, channel.Key, modelName); info != nil {
+		return info, nil
 	}
 
-	// 添加认证头
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", channel.Key))
-	if channel.OpenAIOrganization != nil && *channel.OpenAIOrganization != "" {
-		req.Header.Set("OpenAI-Organization", *channel.OpenAIOrganization)
+	// 回退：尝试从 /api/media-models/catalog 获取（image/video/audio 模型）
+	if info := fetchFromCatalogEndpoint(baseURL, channel.Key, modelName); info != nil {
+		return info, nil
+	}
+
+	return nil, fmt.Errorf("model %s not found in channel API", modelName)
+}
+
+// fetchFromPricingEndpoint 从 /api/pricing 端点获取模型信息
+func fetchFromPricingEndpoint(baseURL, apiKey, modelName string) *channelModelInfo {
+	pricingURL := fmt.Sprintf("%s/api/pricing", baseURL)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", pricingURL, nil)
+	if err != nil {
+		return nil
+	}
+
+	// 某些渠道的 /api/pricing 可能需要认证
+	if apiKey != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch channel models: %w", err)
+		return nil
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("channel API returned status %d", resp.StatusCode)
+		return nil
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil
 	}
 
-	var modelsResp channelModelsResponse
-	if err := json.Unmarshal(body, &modelsResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal channel models: %w", err)
+	// 解析 JSON 数组格式（与 service/upstream_pricing.go 的 upstreamPricingItem 对齐）
+	var pricingItems []struct {
+		ModelName   string  `json:"model_name"`
+		Description string  `json:"description"`
+		Icon        string  `json:"icon"`
+		VendorName  string  `json:"vendor_name"`
+		Tags        string  `json:"tags"`
+		ModelRatio  float64 `json:"model_ratio"`
+		ModelPrice  float64 `json:"model_price"`
+	}
+
+	if err := json.Unmarshal(body, &pricingItems); err != nil {
+		return nil
 	}
 
 	// 查找匹配的模型
-	for _, m := range modelsResp.Data {
-		if m.ID == modelName {
-			return &m, nil
+	for _, item := range pricingItems {
+		if item.ModelName == modelName {
+			return &channelModelInfo{
+				ModelName:   item.ModelName,
+				Description: item.Description,
+				Icon:        item.Icon,
+				VendorName:  item.VendorName,
+				Tags:        item.Tags,
+				ModelRatio:  item.ModelRatio,
+				ModelPrice:  item.ModelPrice,
+			}
 		}
 	}
 
-	return nil, fmt.Errorf("model %s not found in channel", modelName)
+	return nil
+}
+
+// fetchFromCatalogEndpoint 从 /api/media-models/catalog 端点获取模型信息
+func fetchFromCatalogEndpoint(baseURL, apiKey, modelName string) *channelModelInfo {
+	catalogURL := fmt.Sprintf("%s/api/media-models/catalog", baseURL)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", catalogURL, nil)
+	if err != nil {
+		return nil
+	}
+
+	if apiKey != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+
+	// 解析 catalog 响应格式（假设与 canvas_catalog_models 类似）
+	var catalogItems []struct {
+		RemoteID    string `json:"remote_id"`
+		DisplayName string `json:"display_name"`
+		Description string `json:"description"`
+		Icon        string `json:"icon"`
+		VendorName  string `json:"vendor_name"`
+	}
+
+	if err := json.Unmarshal(body, &catalogItems); err != nil {
+		return nil
+	}
+
+	// 查找匹配的模型
+	for _, item := range catalogItems {
+		if item.RemoteID == modelName {
+			return &channelModelInfo{
+				ModelName:   item.RemoteID,
+				Description: item.Description,
+				Icon:        item.Icon,
+				VendorName:  item.VendorName,
+			}
+		}
+	}
+
+	return nil
 }
 
 // fetchUpstreamModelInfo 从上游 API 获取单个模型的元信息
