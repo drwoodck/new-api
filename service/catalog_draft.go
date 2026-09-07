@@ -1,8 +1,12 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -107,7 +111,16 @@ func DraftCatalogEntries(channel *model.Channel, addedModels []string) (drafted 
 // draftCatalogEntryForModel 为单个模型起草目录条目与 models meta 行,两表插入
 // 在同一事务里,失败整体回滚该模型的起草。返回 created 表示本次是否新建了
 // 至少一行(已存在的模型返回 false)。
+//
+// 2026-09-07: 新增自动从上游获取元信息功能,创建 models 行后立即尝试填充
+// description、icon、vendor 等字段。上游获取失败不影响创建流程。
 func draftCatalogEntryForModel(name, capability, contract string) (created bool, err error) {
+	// 先尝试从上游获取元信息（在事务外执行，避免长时间锁表）
+	upstreamInfo, upstreamErr := fetchUpstreamModelInfo(name)
+	if upstreamErr != nil {
+		common.SysLog(fmt.Sprintf("Failed to fetch upstream info for model %s: %v", name, upstreamErr))
+	}
+
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		// 两行同一事务内创建,时间戳取同一次值(其它创建路径均显式设时间戳,
 		// 见 CanvasCatalogModel.Insert / Model.Insert,管理端按此显示创建时间)。
@@ -146,13 +159,47 @@ func draftCatalogEntryForModel(name, capability, contract string) (created bool,
 				CreatedTime:  now,
 				UpdatedTime:  now,
 			}
+
+			// 自动填充上游元信息
+			if upstreamInfo != nil {
+				meta.Description = upstreamInfo.Description
+				meta.Icon = upstreamInfo.Icon
+				meta.NameRule = upstreamInfo.NameRule
+				// 如果有 vendor 信息，尝试查找对应的 vendor_id
+				if upstreamInfo.VendorName != "" {
+					var vendor model.Vendor
+					if err := tx.Where("name = ?", upstreamInfo.VendorName).First(&vendor).Error; err == nil {
+						meta.VendorID = vendor.Id
+					}
+				}
+			}
+
 			if err := tx.Create(meta).Error; err != nil {
 				return err
 			}
 			// Status=0 会被 GORM 的 default:1 在 Create 时覆盖为 1,仿
 			// model.Model.Insert 的二段式写回真实值,确保起草态(status=0)生效。
+			updates := map[string]interface{}{
+				"status":        0,
+				"sync_official": 1,
+			}
+			// 保留上游填充的字段
+			if upstreamInfo != nil {
+				if upstreamInfo.Description != "" {
+					updates["description"] = upstreamInfo.Description
+				}
+				if upstreamInfo.Icon != "" {
+					updates["icon"] = upstreamInfo.Icon
+				}
+				if upstreamInfo.NameRule != 0 {
+					updates["name_rule"] = upstreamInfo.NameRule
+				}
+				if meta.VendorID != 0 {
+					updates["vendor_id"] = meta.VendorID
+				}
+			}
 			if err := tx.Model(&model.Model{}).Where("id = ?", meta.Id).
-				Updates(map[string]interface{}{"status": 0, "sync_official": 1}).Error; err != nil {
+				Updates(updates).Error; err != nil {
 				return err
 			}
 			created = true
@@ -163,4 +210,51 @@ func draftCatalogEntryForModel(name, capability, contract string) (created bool,
 		return false, err
 	}
 	return created, nil
+}
+
+// upstreamModelInfo 从上游获取的模型元信息
+type upstreamModelInfo struct {
+	ModelName   string `json:"model_name"`
+	Description string `json:"description"`
+	Icon        string `json:"icon"`
+	VendorName  string `json:"vendor_name"`
+	NameRule    int    `json:"name_rule"`
+}
+
+// fetchUpstreamModelInfo 从上游 API 获取单个模型的元信息
+func fetchUpstreamModelInfo(modelName string) (*upstreamModelInfo, error) {
+	// 默认使用中文语言获取元信息
+	locale := "zh"
+	base := common.GetEnvOrDefaultString("SYNC_UPSTREAM_BASE", "https://basellm.github.io/llm-metadata")
+	modelsURL := fmt.Sprintf("%s/api/newapi/%s/models.json", base, locale)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(modelsURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch upstream models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("upstream API returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	var upstreamModels []upstreamModelInfo
+	if err := json.Unmarshal(body, &upstreamModels); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal upstream models: %w", err)
+	}
+
+	// 查找匹配的模型
+	for _, m := range upstreamModels {
+		if m.ModelName == modelName {
+			return &m, nil
+		}
+	}
+
+	return nil, fmt.Errorf("model %s not found in upstream", modelName)
 }
