@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useNavigate } from '@tanstack/react-router'
 import { Plus } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -71,6 +71,27 @@ export function CanvasCatalogSection() {
   )
   const [deleteTarget, setDeleteTarget] =
     useState<CanvasCatalogOverviewRow | null>(null)
+
+  // Handle URL prefill parameter from model metadata page
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const prefill = params.get('prefill')
+    if (prefill && overviewRows.length > 0) {
+      const row = overviewRows.find((r) => r.model_name === prefill)
+      if (row) {
+        if (row.catalog_id) {
+          // Model already exists in canvas_catalog, edit it
+          setEditingId(row.catalog_id)
+        } else {
+          // Model not in canvas_catalog, create with prefill
+          setPrefillRemoteId(prefill)
+        }
+        setDialogOpen(true)
+        // Clear URL param after opening dialog by replacing history
+        window.history.replaceState({}, '', window.location.pathname)
+      }
+    }
+  }, [overviewRows])
 
   const { configured, unconfigured } = useMemo(() => {
     const configuredRows: CanvasCatalogOverviewRow[] = []

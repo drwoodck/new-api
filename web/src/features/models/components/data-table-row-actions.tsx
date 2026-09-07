@@ -18,7 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQueryClient } from '@tanstack/react-query'
 import type { Row } from '@tanstack/react-table'
-import { Pencil, Power, PowerOff, Trash2 } from 'lucide-react'
+import { useNavigate } from '@tanstack/react-router'
+import { ExternalLink, Pencil, Power, PowerOff, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -49,6 +50,7 @@ interface DataTableRowActionsProps {
 
 export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const model = row.original
   const { setOpen, setCurrentRow } = useModels()
   const queryClient = useQueryClient()
@@ -65,10 +67,34 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     handleToggleModelStatus(model.id, model.status, queryClient)
   }
 
+  const handleGoToCanvasCatalog = () => {
+    void navigate({
+      to: '/system-settings/models/$section',
+      params: { section: 'canvas-catalog' },
+      search: (prev) => ({ ...prev, prefill: model.model_name }),
+    })
+  }
+
   const toggleLabel = isEnabled ? t('Disable') : t('Enable')
 
   return (
     <div className='-ml-1.5 flex items-center gap-1'>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant='ghost'
+              size='icon-sm'
+              onClick={handleGoToCanvasCatalog}
+              aria-label={t('去配置画布目录')}
+            />
+          }
+        >
+          <ExternalLink />
+        </TooltipTrigger>
+        <TooltipContent>{t('去配置画布目录')}</TooltipContent>
+      </Tooltip>
+
       <Tooltip>
         <TooltipTrigger
           render={

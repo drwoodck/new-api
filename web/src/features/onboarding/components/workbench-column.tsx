@@ -43,7 +43,7 @@ export function WorkbenchColumn({
         </span>
         {headerAction ? <div className='ml-auto'>{headerAction}</div> : null}
       </div>
-      <div className='flex flex-col gap-2 p-3'>
+      <div className='flex flex-col gap-2 overflow-y-auto p-3'>
         {count === 0 ? (
           <p className='text-muted-foreground px-1 py-4 text-center text-xs'>
             {emptyText}

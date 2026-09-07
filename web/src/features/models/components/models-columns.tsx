@@ -102,7 +102,7 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
       size: 64,
     },
 
-    // Model Name column (with model icon)
+    // Model Name column (with model icon and "NEW" badge)
     {
       accessorKey: 'model_name',
       header: t('Model Name'),
@@ -117,6 +117,10 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
           'N'
         const icon = getCompactModelIcon(iconKey)
 
+        // Check if model is new (created within last 24 hours)
+        const isNew = model.created_time &&
+          Date.now() - model.created_time * 1000 < 86400000
+
         return (
           <div className='flex max-w-full min-w-0 items-center gap-2'>
             <div className='flex size-5 shrink-0 items-center justify-center overflow-hidden'>
@@ -129,6 +133,14 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
               size='sm'
               className='-ml-1.5 font-mono'
             />
+            {isNew && (
+              <StatusBadge
+                label={t('新')}
+                variant='success'
+                size='sm'
+                className='shrink-0'
+              />
+            )}
           </div>
         )
       },
