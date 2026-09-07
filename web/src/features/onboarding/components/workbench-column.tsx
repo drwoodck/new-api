@@ -35,7 +35,7 @@ export function WorkbenchColumn({
   headerAction?: React.ReactNode
 }) {
   return (
-    <div className='flex min-h-0 flex-col overflow-hidden rounded-xl border'>
+    <div className='flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border'>
       <div className='flex flex-wrap items-center gap-2 border-b px-4 py-2.5'>
         <h3 className='text-sm font-semibold'>{title}</h3>
         <span className='bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs'>
