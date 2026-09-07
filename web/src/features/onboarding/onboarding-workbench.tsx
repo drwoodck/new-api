@@ -104,7 +104,7 @@ export function OnboardingWorkbench() {
 
   return (
     <>
-      <div className='grid flex-1 grid-cols-1 gap-4 lg:grid-cols-3'>
+      <div className='grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-3'>
         {/* 待补元数据 */}
         <WorkbenchColumn
           title={t('待补元数据')}
