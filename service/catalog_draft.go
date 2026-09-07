@@ -96,7 +96,7 @@ func DraftCatalogEntries(channel *model.Channel, addedModels []string) (drafted 
 		}
 		seen[name] = struct{}{}
 
-		created, draftErr := draftCatalogEntryForModel(name, capability, contract)
+		created, draftErr := draftCatalogEntryForModel(channel, name, capability, contract)
 		if draftErr != nil {
 			common.SysError(fmt.Sprintf("画布目录自动起草失败: channel_id=%d model=%s err=%v", channel.Id, name, draftErr))
 			continue
@@ -112,13 +112,31 @@ func DraftCatalogEntries(channel *model.Channel, addedModels []string) (drafted 
 // 在同一事务里,失败整体回滚该模型的起草。返回 created 表示本次是否新建了
 // 至少一行(已存在的模型返回 false)。
 //
-// 2026-09-07: 新增自动从上游获取元信息功能,创建 models 行后立即尝试填充
-// description、icon、vendor 等字段。上游获取失败不影响创建流程。
-func draftCatalogEntryForModel(name, capability, contract string) (created bool, err error) {
-	// 先尝试从上游获取元信息（在事务外执行，避免长时间锁表）
-	upstreamInfo, upstreamErr := fetchUpstreamModelInfo(name)
-	if upstreamErr != nil {
-		common.SysLog(fmt.Sprintf("Failed to fetch upstream info for model %s: %v", name, upstreamErr))
+// 2026-09-07: 新增自动获取模型元信息功能:
+//   1. 优先从渠道 API (/v1/models) 获取模型描述和能力信息
+//   2. 如果渠道 API 失败,回退到 QuantumNous/new-api 元数据库
+//   3. 上游获取失败不影响创建流程,仅记录日志
+func draftCatalogEntryForModel(channel *model.Channel, name, capability, contract string) (created bool, err error) {
+	// 先尝试从渠道 API 获取模型信息（在事务外执行，避免长时间锁表）
+	var description string
+	var channelInfo *channelModelInfo
+
+	if channel != nil {
+		channelInfo, _ = fetchChannelModelInfo(channel, name)
+		if channelInfo != nil && channelInfo.Description != "" {
+			description = channelInfo.Description
+			common.SysLog(fmt.Sprintf("Fetched model info from channel API: %s", name))
+		}
+	}
+
+	// 如果渠道 API 未返回描述，尝试从元数据库获取
+	var upstreamInfo *upstreamModelInfo
+	if description == "" {
+		upstreamInfo, _ = fetchUpstreamModelInfo(name)
+		if upstreamInfo != nil && upstreamInfo.Description != "" {
+			description = upstreamInfo.Description
+			common.SysLog(fmt.Sprintf("Fetched model info from metadata database: %s", name))
+		}
 	}
 
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
@@ -160,11 +178,20 @@ func draftCatalogEntryForModel(name, capability, contract string) (created bool,
 				UpdatedTime:  now,
 			}
 
-			// 自动填充上游元信息
+			// 自动填充模型元信息（优先使用渠道 API 信息，回退到元数据库）
+			if description != "" {
+				meta.Description = description
+			}
 			if upstreamInfo != nil {
-				meta.Description = upstreamInfo.Description
-				meta.Icon = upstreamInfo.Icon
-				meta.NameRule = upstreamInfo.NameRule
+				if meta.Description == "" && upstreamInfo.Description != "" {
+					meta.Description = upstreamInfo.Description
+				}
+				if upstreamInfo.Icon != "" {
+					meta.Icon = upstreamInfo.Icon
+				}
+				if upstreamInfo.NameRule != 0 {
+					meta.NameRule = upstreamInfo.NameRule
+				}
 				// 如果有 vendor 信息，尝试查找对应的 vendor_id
 				if upstreamInfo.VendorName != "" {
 					var vendor model.Vendor
@@ -183,20 +210,18 @@ func draftCatalogEntryForModel(name, capability, contract string) (created bool,
 				"status":        0,
 				"sync_official": 1,
 			}
-			// 保留上游填充的字段
-			if upstreamInfo != nil {
-				if upstreamInfo.Description != "" {
-					updates["description"] = upstreamInfo.Description
-				}
-				if upstreamInfo.Icon != "" {
-					updates["icon"] = upstreamInfo.Icon
-				}
-				if upstreamInfo.NameRule != 0 {
-					updates["name_rule"] = upstreamInfo.NameRule
-				}
-				if meta.VendorID != 0 {
-					updates["vendor_id"] = meta.VendorID
-				}
+			// 保留填充的字段
+			if meta.Description != "" {
+				updates["description"] = meta.Description
+			}
+			if meta.Icon != "" {
+				updates["icon"] = meta.Icon
+			}
+			if meta.NameRule != 0 {
+				updates["name_rule"] = meta.NameRule
+			}
+			if meta.VendorID != 0 {
+				updates["vendor_id"] = meta.VendorID
 			}
 			if err := tx.Model(&model.Model{}).Where("id = ?", meta.Id).
 				Updates(updates).Error; err != nil {
@@ -219,6 +244,74 @@ type upstreamModelInfo struct {
 	Icon        string `json:"icon"`
 	VendorName  string `json:"vendor_name"`
 	NameRule    int    `json:"name_rule"`
+}
+
+// channelModelInfo 从渠道 API 返回的模型信息
+type channelModelInfo struct {
+	ID          string   `json:"id"`
+	Object      string   `json:"object"`
+	Created     int64    `json:"created"`
+	OwnedBy     string   `json:"owned_by"`
+	Description string   `json:"description"`
+	Capabilities []string `json:"capabilities"`
+}
+
+// channelModelsResponse 渠道 /v1/models 接口的响应
+type channelModelsResponse struct {
+	Object string             `json:"object"`
+	Data   []channelModelInfo `json:"data"`
+}
+
+// fetchChannelModelInfo 从渠道 API 获取单个模型的信息
+func fetchChannelModelInfo(channel *model.Channel, modelName string) (*channelModelInfo, error) {
+	if channel == nil {
+		return nil, fmt.Errorf("channel is nil")
+	}
+
+	// 构建请求 URL: baseURL + /v1/models
+	baseURL := strings.TrimRight(channel.GetBaseURL(), "/")
+	modelsURL := fmt.Sprintf("%s/v1/models", baseURL)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", modelsURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// 添加认证头
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", channel.Key))
+	if channel.OpenAIOrganization != nil && *channel.OpenAIOrganization != "" {
+		req.Header.Set("OpenAI-Organization", *channel.OpenAIOrganization)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch channel models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("channel API returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	var modelsResp channelModelsResponse
+	if err := json.Unmarshal(body, &modelsResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal channel models: %w", err)
+	}
+
+	// 查找匹配的模型
+	for _, m := range modelsResp.Data {
+		if m.ID == modelName {
+			return &m, nil
+		}
+	}
+
+	return nil, fmt.Errorf("model %s not found in channel", modelName)
 }
 
 // fetchUpstreamModelInfo 从上游 API 获取单个模型的元信息
