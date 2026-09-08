@@ -93,9 +93,13 @@ export function TierPriceEditor({
     [activeTierType]
   )
 
+  // 通知父组件校验状态（父组件根据 errors 决定是否禁用保存按钮）。
+  // 不把 onValidationChange 放入依赖 —— 它是父组件传入的内联函数，每次渲染都是新引用，
+  // 会触发无限循环：effect 调用 → setGroupPriceRows → 父组件重渲染 → 新引用 → effect 再次触发。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     onValidationChange?.({ errors, warnings })
-  }, [errors, warnings, onValidationChange])
+  }, [errors, warnings])
 
   const commit = useCallback(
     (nextRows: TierPriceRow[]) => {
