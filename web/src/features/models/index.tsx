@@ -119,7 +119,13 @@ function ModelsContent() {
                 ))}
               </TabsList>
             </Tabs>
-            <div className='min-h-0 flex-1'>{renderSectionContent()}</div>
+            {activeSection === 'onboarding' ? (
+              <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
+                {renderSectionContent()}
+              </div>
+            ) : (
+              <div className='min-h-0 flex-1'>{renderSectionContent()}</div>
+            )}
           </div>
         </SectionPageLayout.Content>
       </SectionPageLayout>

@@ -103,7 +103,7 @@ export function OnboardingWorkbench() {
   }
 
   return (
-    <>
+    <div className='flex h-full flex-col gap-4 overflow-hidden'>
       <div className='grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-3'>
         {/* 待补元数据 */}
         <WorkbenchColumn
@@ -198,7 +198,9 @@ export function OnboardingWorkbench() {
       </div>
 
       {/* 第四块:已上线模型更新(一键同步上游定价) */}
-      <SyncFromUpstream />
+      <div className='shrink-0'>
+        <SyncFromUpstream />
+      </div>
 
       {/* 批量开闸的 force 二次确认 */}
       <ConfirmDialog
@@ -220,6 +222,6 @@ export function OnboardingWorkbench() {
         isLoading={launchMutation.isPending}
         handleConfirm={() => void handleConfirmBulkForce()}
       />
-    </>
+    </div>
   )
 }

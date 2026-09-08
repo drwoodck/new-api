@@ -49,9 +49,10 @@ func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 func GetGroupEnabledModels(group string) ([]string, error) {
 	var models []string
 	err := DB.Table("abilities").
-		Where(commonGroupCol+" = ? and enabled = ?", group, true).
-		Distinct("model").
-		Pluck("model", &models).Error
+		Joins("INNER JOIN channels ON abilities.channel_id = channels.id").
+		Where(commonGroupCol+" = ? AND abilities.enabled = ? AND channels.status = ?", group, true, 1).
+		Distinct("abilities.model").
+		Pluck("abilities.model", &models).Error
 	if err != nil {
 		return nil, err
 	}
@@ -60,8 +61,12 @@ func GetGroupEnabledModels(group string) ([]string, error) {
 
 func GetEnabledModels() []string {
 	var models []string
-	// Find distinct models
-	DB.Table("abilities").Where("enabled = ?", true).Distinct("model").Pluck("model", &models)
+	// Find distinct models from enabled abilities with enabled channels (status = 1)
+	DB.Table("abilities").
+		Joins("INNER JOIN channels ON abilities.channel_id = channels.id").
+		Where("abilities.enabled = ? AND channels.status = ?", true, 1).
+		Distinct("abilities.model").
+		Pluck("abilities.model", &models)
 	return models
 }
 
