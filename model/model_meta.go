@@ -53,6 +53,11 @@ type Model struct {
 
 	MatchedModels []string `json:"matched_models,omitempty" gorm:"-"`
 	MatchedCount  int      `json:"matched_count,omitempty" gorm:"-"`
+
+	// Price information (runtime fields)
+	ModelRatio      float64 `json:"model_ratio,omitempty" gorm:"-"`
+	ModelPrice      float64 `json:"model_price,omitempty" gorm:"-"`
+	CompletionRatio float64 `json:"completion_ratio,omitempty" gorm:"-"`
 }
 
 func (mi *Model) Insert() error {

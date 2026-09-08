@@ -190,7 +190,6 @@ export function ModelsTable() {
     columns,
     totalCount,
     initialColumnVisibility: {
-      description: false,
       bound_channels: false,
       quota_types: false,
     },

@@ -337,15 +337,22 @@ export function CanvasCatalogFormDialog({
             <FormField
               control={form.control}
               name='capabilities'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('能力')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      placeholder='video_gen'
-                      {...field}
-                      onChange={(e) => {
-                        field.onChange(e)
+              render={({ field }) => {
+                const knownCapabilities = meta
+                  ? Object.keys(meta.capability_to_contract)
+                  : []
+                return (
+                  <FormItem>
+                    <FormLabel>{t('能力')}</FormLabel>
+                    <Select
+                      items={knownCapabilities.map((c) => ({
+                        value: c,
+                        label: c,
+                      }))}
+                      value={field.value}
+                      onValueChange={(v) => {
+                        if (v == null) return
+                        field.onChange(v)
                         // 新建且管理员未手动改过 contract 时才自动预填 —— 编辑既有
                         // 条目或手改过之后都不再覆盖(逃生舱)。
                         if (
@@ -354,23 +361,37 @@ export function CanvasCatalogFormDialog({
                           meta
                         ) {
                           const derived = deriveContractFromCapabilities(
-                            e.target.value,
+                            v,
                             meta.capability_to_contract
                           )
                           if (derived) form.setValue('contract', derived)
                         }
                       }}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t('逗号分隔,如 video_gen,VideoGen')}
-                    {meta && Object.keys(meta.capability_to_contract).length > 0
-                      ? `;${t('已知能力')}: ${Object.keys(meta.capability_to_contract).join(', ')}`
-                      : null}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
+                    >
+                      <FormControl>
+                        <SelectTrigger disabled={!meta} className='w-full'>
+                          <SelectValue placeholder={t('选择模型能力类型')} />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          {knownCapabilities.map((c) => (
+                            <SelectItem key={c} value={c}>
+                              {c}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>
+                      {meta
+                        ? t('选择该模型的能力类型,将自动推导对应的 contract')
+                        : t('正在加载可用的能力列表...')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )
+              }}
             />
 
             <FormField

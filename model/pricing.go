@@ -116,6 +116,16 @@ func GetModelSupportEndpointTypes(model string) []constant.EndpointType {
 	return make([]constant.EndpointType, 0)
 }
 
+// GetModelPricingMap returns a map of model names to their pricing information
+func GetModelPricingMap() map[string]*Pricing {
+	pricings := GetPricing()
+	result := make(map[string]*Pricing, len(pricings))
+	for i := range pricings {
+		result[pricings[i].ModelName] = &pricings[i]
+	}
+	return result
+}
+
 func getPricingEndpointTypesForAbility(ability AbilityWithChannel, advancedCustomConfigs map[int]*dto.AdvancedCustomConfig) []constant.EndpointType {
 	if ability.ChannelType != constant.ChannelTypeAdvancedCustom {
 		return common.GetEndpointTypesByChannelType(ability.ChannelType, ability.Model)

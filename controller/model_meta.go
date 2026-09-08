@@ -237,7 +237,7 @@ func DeleteModelMeta(c *gin.Context) {
 	common.ApiSuccess(c, nil)
 }
 
-// enrichModels 批量填充附加信息：端点、渠道、分组、计费类型，避免 N+1 查询
+// enrichModels 批量填充附加信息：端点、渠道、分组、计费类型、价格，避免 N+1 查询
 func enrichModels(models []*model.Model) {
 	if len(models) == 0 {
 		return
@@ -266,9 +266,13 @@ func enrichModels(models []*model.Model) {
 	// 一次性拉全表按模型名分桶,避免对每个开了分别定价的模型单独查一次。
 	groupPricesByModel, _ := model.GetAllModelGroupPrices()
 
-	// 3) 精确模型：端点从缓存、渠道批量映射、分组/计费类型从缓存
+	// 获取定价信息用于填充价格字段
+	pricingMap := model.GetModelPricingMap()
+
+	// 3) 精确模型：端点从缓存、渠道批量映射、分组/计费类型/价格从缓存
 	for name, indices := range exactIdx {
 		chs := channelsByModel[name]
+		pricing := pricingMap[name]
 		for _, idx := range indices {
 			mm := models[idx]
 			if mm.Endpoints == "" {
@@ -280,6 +284,11 @@ func enrichModels(models []*model.Model) {
 			mm.BoundChannels = chs
 			mm.EnableGroups = model.GetModelEnableGroups(mm.ModelName)
 			mm.QuotaTypes = model.GetModelQuotaTypes(mm.ModelName)
+			if pricing != nil {
+				mm.ModelRatio = pricing.ModelRatio
+				mm.ModelPrice = pricing.ModelPrice
+				mm.CompletionRatio = pricing.CompletionRatio
+			}
 			if mm.GroupPricingEnabled {
 				if rows, ok := groupPricesByModel[name]; ok {
 					mm.GroupPrices = make([]model.ModelGroupPrice, 0, len(rows))

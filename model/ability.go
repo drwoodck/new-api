@@ -214,7 +214,13 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 	groups_ := strings.Split(channel.Group, ",")
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
+	uniqueModels := make(map[string]struct{})
 	for _, model := range models_ {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		uniqueModels[model] = struct{}{}
 		for _, group := range groups_ {
 			key := group + "|" + model
 			if _, exists := abilitySet[key]; exists {
@@ -241,6 +247,12 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 	if tx != nil {
 		useDB = tx
 	}
+
+	// Auto-create model meta records for models that don't exist
+	if err := ensureModelsExist(useDB, uniqueModels); err != nil {
+		return fmt.Errorf("failed to ensure models exist: %w", err)
+	}
+
 	for _, chunk := range lo.Chunk(abilities, 50) {
 		err := useDB.Clauses(clause.OnConflict{DoNothing: true}).Create(&chunk).Error
 		if err != nil {
@@ -286,7 +298,13 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 	groups_ := strings.Split(channel.Group, ",")
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
+	uniqueModels := make(map[string]struct{})
 	for _, model := range models_ {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		uniqueModels[model] = struct{}{}
 		for _, group := range groups_ {
 			key := group + "|" + model
 			if _, exists := abilitySet[key]; exists {
@@ -307,6 +325,14 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 	}
 
 	if len(abilities) > 0 {
+		// Auto-create model meta records for models that don't exist
+		if err = ensureModelsExist(tx, uniqueModels); err != nil {
+			if isNewTx {
+				tx.Rollback()
+			}
+			return fmt.Errorf("failed to ensure models exist: %w", err)
+		}
+
 		for _, chunk := range lo.Chunk(abilities, 50) {
 			err = tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&chunk).Error
 			if err != nil {
@@ -346,6 +372,65 @@ func UpdateAbilityByTag(tag string, newTag *string, priority *int64, weight *uin
 		ability.Weight = *weight
 	}
 	return DB.Model(&Ability{}).Where("tag = ?", tag).Updates(ability).Error
+}
+
+// ensureModelsExist creates Model records for any models that don't already exist in the models table.
+// This ensures all models added through channels automatically have corresponding metadata entries.
+func ensureModelsExist(db *gorm.DB, modelNames map[string]struct{}) error {
+	if len(modelNames) == 0 {
+		return nil
+	}
+
+	// Get list of model names
+	names := make([]string, 0, len(modelNames))
+	for name := range modelNames {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+
+	// Check which models already exist
+	var existingModels []Model
+	if err := db.Select("model_name").Where("model_name IN ?", names).Find(&existingModels).Error; err != nil {
+		return err
+	}
+
+	existingMap := make(map[string]struct{}, len(existingModels))
+	for _, m := range existingModels {
+		existingMap[m.ModelName] = struct{}{}
+	}
+
+	// Create missing models
+	now := common.GetTimestamp()
+	modelsToCreate := make([]Model, 0)
+	for _, name := range names {
+		if _, exists := existingMap[name]; !exists {
+			modelsToCreate = append(modelsToCreate, Model{
+				ModelName:    name,
+				Description:  "",
+				Status:       1,
+				SyncOfficial: 0,
+				NameRule:     NameRuleExact,
+				CreatedTime:  now,
+				UpdatedTime:  now,
+			})
+		}
+	}
+
+	if len(modelsToCreate) > 0 {
+		// Batch insert with conflict handling (in case of concurrent inserts)
+		for _, chunk := range lo.Chunk(modelsToCreate, 50) {
+			if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&chunk).Error; err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 var fixLock = sync.Mutex{}

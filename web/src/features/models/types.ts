@@ -115,6 +115,10 @@ export interface Model {
    */
   group_pricing_enabled?: boolean
   group_prices?: ModelGroupPrice[]
+  // Price information
+  model_ratio?: number
+  model_price?: number
+  completion_ratio?: number
 }
 
 /**

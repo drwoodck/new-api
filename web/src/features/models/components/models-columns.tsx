@@ -277,7 +277,6 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
     {
       accessorKey: 'description',
       header: t('Description'),
-      meta: { mobileHidden: true },
       cell: ({ row }) => {
         const description = row.getValue('description') as string
         const modelName = row.getValue('model_name') as string
@@ -287,6 +286,39 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
         )
       },
       size: 150,
+      enableSorting: false,
+    },
+
+    // Price column
+    {
+      accessorKey: 'model_price',
+      header: t('Price'),
+      cell: ({ row }) => {
+        const model = row.original
+        const modelPrice = model.model_price
+        const modelRatio = model.model_ratio
+        const completionRatio = model.completion_ratio
+
+        // Display price information
+        if (modelPrice && modelPrice > 0) {
+          return (
+            <div className='font-mono text-sm whitespace-nowrap'>
+              ${modelPrice.toFixed(4)}
+            </div>
+          )
+        } else if (modelRatio && modelRatio > 0) {
+          const ratioText = completionRatio && completionRatio !== modelRatio
+            ? `${modelRatio}/${completionRatio}`
+            : `${modelRatio}`
+          return (
+            <div className='font-mono text-sm whitespace-nowrap'>
+              {ratioText}×
+            </div>
+          )
+        }
+        return <span className='text-muted-foreground text-xs'>-</span>
+      },
+      size: 120,
       enableSorting: false,
     },
 
