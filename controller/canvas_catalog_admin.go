@@ -52,6 +52,21 @@ func GetCanvasCatalogModelAdmin(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+
+	// 填充 models 表的说明和显示名称（2026-09-09）
+	metaDescriptions, err := model.GetModelMetaDescriptionMap([]string{m.RemoteID})
+	if err == nil && len(metaDescriptions) > 0 {
+		if desc, ok := metaDescriptions[m.RemoteID]; ok && desc != "" {
+			m.Description = desc
+		}
+	}
+	metaDisplayNames, err := model.GetModelMetaDisplayNameMap([]string{m.RemoteID})
+	if err == nil && len(metaDisplayNames) > 0 {
+		if displayName, ok := metaDisplayNames[m.RemoteID]; ok && displayName != "" {
+			m.DisplayName = displayName
+		}
+	}
+
 	common.ApiSuccess(c, m)
 }
 

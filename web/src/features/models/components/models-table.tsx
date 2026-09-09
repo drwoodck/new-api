@@ -197,6 +197,8 @@ export function ModelsTable() {
     pagination,
     globalFilter,
     enableRowSelection: true,
+    enableColumnResizing: true,
+    columnResizeMode: 'onChange',
     onColumnFiltersChange,
     onPaginationChange,
     onGlobalFilterChange,
