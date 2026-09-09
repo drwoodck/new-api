@@ -285,7 +285,8 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
           <DescriptionCell modelName={modelName} description={description} />
         )
       },
-      size: 150,
+      size: 300,
+      minSize: 200,
       enableSorting: false,
     },
 
