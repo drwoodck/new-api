@@ -295,6 +295,53 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
       header: t('Price'),
       cell: ({ row }) => {
         const model = row.original
+
+        // 1. 优先显示分组价格（如果启用了分组定价）
+        if (model.group_pricing_enabled && model.group_prices && model.group_prices.length > 0) {
+          // 找到所有配置了价格的分组
+          const groupsWithPrice = model.group_prices.filter(gp => {
+            return (gp.model_price && gp.model_price > 0) ||
+                   (gp.video_second_price && gp.video_second_price > 0) ||
+                   (gp.price_tiers && gp.price_tiers.length > 0) ||
+                   (gp.model_ratio && gp.model_ratio > 0)
+          })
+
+          if (groupsWithPrice.length > 0) {
+            // 显示第一个分组的价格，并标注分组数量
+            const firstGroup = groupsWithPrice[0]
+            let priceText = ''
+
+            if (firstGroup.model_price && firstGroup.model_price > 0) {
+              priceText = `$${firstGroup.model_price.toFixed(4)}`
+            } else if (firstGroup.video_second_price && firstGroup.video_second_price > 0) {
+              priceText = `$${firstGroup.video_second_price.toFixed(4)}/s`
+            } else if (firstGroup.price_tiers && firstGroup.price_tiers.length > 0) {
+              const prices = firstGroup.price_tiers.map(t => t.price_per_unit)
+              const min = Math.min(...prices)
+              const max = Math.max(...prices)
+              priceText = min === max ? `$${min.toFixed(4)}` : `$${min.toFixed(4)}-$${max.toFixed(4)}`
+            } else if (firstGroup.model_ratio && firstGroup.model_ratio > 0) {
+              const ratioText =
+                firstGroup.completion_ratio != null && firstGroup.completion_ratio !== firstGroup.model_ratio
+                  ? `${firstGroup.model_ratio}/${firstGroup.completion_ratio}`
+                  : `${firstGroup.model_ratio}`
+              priceText = `${ratioText}×`
+            }
+
+            return (
+              <div className='flex items-center gap-1'>
+                <span className='font-mono text-sm whitespace-nowrap'>{priceText}</span>
+                {groupsWithPrice.length > 1 && (
+                  <span className='text-xs text-muted-foreground'>
+                    (+{groupsWithPrice.length - 1})
+                  </span>
+                )}
+              </div>
+            )
+          }
+        }
+
+        // 2. 回退到统一定价
         const modelPrice = model.model_price
         const modelRatio = model.model_ratio
         const completionRatio = model.completion_ratio
