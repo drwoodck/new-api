@@ -307,9 +307,12 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
             </div>
           )
         } else if (modelRatio && modelRatio > 0) {
-          const ratioText = completionRatio && completionRatio !== modelRatio
-            ? `${modelRatio}/${completionRatio}`
-            : `${modelRatio}`
+          // 检查 completionRatio 是否存在且与 modelRatio 不同
+          // 注意：completionRatio 可能是 0（有效值），不能用 && 判断
+          const ratioText =
+            completionRatio != null && completionRatio !== modelRatio
+              ? `${modelRatio}/${completionRatio}`
+              : `${modelRatio}`
           return (
             <div className='font-mono text-sm whitespace-nowrap'>
               {ratioText}×
