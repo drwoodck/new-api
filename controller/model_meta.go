@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -284,11 +285,24 @@ func enrichModels(models []*model.Model) {
 			mm.BoundChannels = chs
 			mm.EnableGroups = model.GetModelEnableGroups(mm.ModelName)
 			mm.QuotaTypes = model.GetModelQuotaTypes(mm.ModelName)
+
+			// 价格填充：优先从 pricingMap（有 ability 的模型），无则从 ratio_setting 兜底
 			if pricing != nil {
 				mm.ModelRatio = pricing.ModelRatio
 				mm.ModelPrice = pricing.ModelPrice
 				mm.CompletionRatio = pricing.CompletionRatio
+			} else {
+				// 兜底：对于没有 ability 的模型，直接从 ratio_setting 获取价格
+				if modelPrice, findPrice := ratio_setting.GetModelPrice(mm.ModelName, false); findPrice {
+					mm.ModelPrice = modelPrice
+				} else {
+					if modelRatio, found, _ := ratio_setting.GetModelRatio(mm.ModelName); found {
+						mm.ModelRatio = modelRatio
+						mm.CompletionRatio = ratio_setting.GetCompletionRatio(mm.ModelName)
+					}
+				}
 			}
+
 			if mm.GroupPricingEnabled {
 				if rows, ok := groupPricesByModel[name]; ok {
 					mm.GroupPrices = make([]model.ModelGroupPrice, 0, len(rows))
