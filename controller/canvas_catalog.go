@@ -211,7 +211,7 @@ func resolveCanvasGroupPrice(remoteID, group string, groupPrices map[string]mode
 // 分组名字符串本身。
 // groupPrices 是调用方按模型预载的分组价格行(本模型的 group → 行,nil 表示
 // 该模型没有预载到任何行)——目录下发循环零逐条点查。
-func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, group string, metaDescriptions map[string]string, groupPrices map[string]model.ModelGroupPrice) canvasCatalogWireModel {
+func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, group string, metaDescriptions map[string]string, metaDisplayNames map[string]string, groupPrices map[string]model.ModelGroupPrice) canvasCatalogWireModel {
 	w := canvasCatalogWireModel{
 		RemoteID:      m.RemoteID,
 		DisplayName:   m.DisplayName,
@@ -225,6 +225,11 @@ func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, g
 	}
 	if groupModels != nil {
 		_, w.GroupVisible = groupModels[m.RemoteID]
+	}
+	// 显示名称统一真源：优先 models 表的 display_name，没有该行或显示名称为空时
+	// 回退目录的 display_name（存量兼容）
+	if displayName := metaDisplayNames[m.RemoteID]; displayName != "" {
+		w.DisplayName = displayName
 	}
 	// 说明统一真源(2026-09-04 spec 3.7):优先 models 表的说明,没有该行或
 	// 说明为空时回退目录存量文字(列已冻结,仅旧数据兜底)。
@@ -312,7 +317,7 @@ func GetCanvasCatalog(c *gin.Context) {
 		return
 	}
 
-	// 批量取 models 表说明;查询失败按 fail-open 处理(回退目录存量文字),
+	// 批量取 models 表说明和显示名称;查询失败按 fail-open 处理(回退目录存量文字),
 	// 不让一次 meta 查询故障弄垮整份目录 —— 与分组可见性的 fail-open 同原则。
 	remoteIDs := make([]string, 0, len(rows))
 	for i := range rows {
@@ -322,6 +327,11 @@ func GetCanvasCatalog(c *gin.Context) {
 	if err != nil {
 		common.SysError(fmt.Sprintf("读取模型说明失败,目录说明回退存量文字: %v", err))
 		metaDescriptions = map[string]string{}
+	}
+	metaDisplayNames, err := model.GetModelMetaDisplayNameMap(remoteIDs)
+	if err != nil {
+		common.SysError(fmt.Sprintf("读取模型显示名称失败,目录显示名称回退 remote_id: %v", err))
+		metaDisplayNames = map[string]string{}
 	}
 
 	// 预载全部分组价格行(分别定价模式的逐分组价),目录下发循环零逐条点查 ——
@@ -340,7 +350,7 @@ func GetCanvasCatalog(c *gin.Context) {
 
 	models := make([]canvasCatalogWireModel, 0, len(rows))
 	for i := range rows {
-		models = append(models, toWireModel(&rows[i], groupModels, effectiveGroup, metaDescriptions, allGroupPrices[rows[i].RemoteID]))
+		models = append(models, toWireModel(&rows[i], groupModels, effectiveGroup, metaDescriptions, metaDisplayNames, allGroupPrices[rows[i].RemoteID]))
 	}
 
 	response := gin.H{

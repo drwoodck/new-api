@@ -232,6 +232,7 @@ export function fromGroupPriceRows(rows: GroupPriceRow[]): ModelGroupPrice[] {
 const extendedModelFormSchema = z.object({
   id: z.number().optional(),
   model_name: z.string().min(1, 'Model name is required'),
+  display_name: z.string(),
   description: z.string(),
   icon: z.string(),
   tags: z.array(z.string()),
@@ -537,6 +538,7 @@ export function ModelMutateDrawer({
     resolver: zodResolver(extendedModelFormSchema),
     defaultValues: {
       model_name: '',
+      display_name: '',
       description: '',
       icon: '',
       tags: [],
@@ -609,6 +611,7 @@ export function ModelMutateDrawer({
       form.reset({
         id: model.id,
         model_name: model.model_name,
+        display_name: model.display_name || '',
         description: model.description || '',
         icon: model.icon || '',
         tags: parseModelTags(model.tags),
@@ -636,6 +639,7 @@ export function ModelMutateDrawer({
       setGroupPriceRows(toGroupPriceRows(undefined, groupNamesRef.current))
       form.reset({
         model_name: modelName,
+        display_name: '',
         description: '',
         icon: '',
         tags: [],
@@ -994,6 +998,26 @@ export function ModelMutateDrawer({
                     </FormControl>
                     <FormDescription>
                       {t('The unique identifier for this model')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='display_name'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Display Name')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder={t('GPT-4, Claude 3 Opus, etc.')}
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Friendly name shown in Canvas catalog')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

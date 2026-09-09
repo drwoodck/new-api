@@ -185,3 +185,24 @@ func GetModelMetaDescriptionMap(modelNames []string) (map[string]string, error) 
 	}
 	return out, nil
 }
+
+// GetModelMetaDisplayNameMap 按模型名批量取 models 表的显示名称。
+// 用于画布模型目录自动读取模型显示名称。
+// 空显示名称不入 map,调用方据此回退 remote_id 作为显示名称。
+func GetModelMetaDisplayNameMap(modelNames []string) (map[string]string, error) {
+	out := make(map[string]string, len(modelNames))
+	if len(modelNames) == 0 {
+		return out, nil
+	}
+	var rows []Model
+	if err := DB.Select("model_name", "display_name").
+		Where("model_name IN ?", modelNames).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		if r.DisplayName != "" {
+			out[r.ModelName] = r.DisplayName
+		}
+	}
+	return out, nil
+}
