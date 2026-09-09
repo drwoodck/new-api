@@ -219,6 +219,14 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 	model.UpdateUserLastLoginAt(user.Id)
 	service.WriteRefreshCookie(c, bundle.RefreshToken)
 	setAuthNoStore(c)
+
+	// 补齐创建画布token（异步，不阻塞登录响应）
+	go func(userId int) {
+		if err := service.EnsureCanvasTokens(userId); err != nil {
+			common.SysError(fmt.Sprintf("用户 %d 登录后创建画布token失败: %v", userId, err))
+		}
+	}(user.Id)
+
 	recordLoginAudit(user, c)
 	c.JSON(http.StatusOK, gin.H{
 		"message": "",
