@@ -57,6 +57,11 @@ export type CanvasCatalogOverviewRow = {
   meta_display_name: string
   /** 元信息页(models 表)维护的模型说明,目录侧只读。 */
   description: string
+  /**
+   * 当前能调用该模型的用户分组,与元信息页「启用分组」列同源(abilities 缓存)。
+   * 后端已排序,因此两页对同一模型给出的顺序也一致。
+   */
+  enable_groups: string[]
   contract: string
   capabilities: string
   catalog_enabled: boolean

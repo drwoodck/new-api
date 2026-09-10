@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next'
 
 import { BadgeCell } from '@/components/data-table/core/badge-cell'
 import { StaticDataTable } from '@/components/data-table/static/static-data-table'
+import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 
@@ -144,6 +145,25 @@ export function CanvasCatalogOverviewTable(
               )}
             </BadgeCell>
           ),
+        },
+        {
+          // 与元信息页「启用分组」同一份数据、同一套徽标:哪些分组现在真的能
+          // 调用这个模型。空 = 没有任何启用中的渠道在为该模型供能,与画布目录
+          // 是否配置无关 —— 已上下架的模型同样可能为空。
+          id: 'enable_groups',
+          // 复用元信息页那一列的 key,两页在每种语言下措辞必然相同。
+          header: t('Enable Groups'),
+          wrap: true,
+          cell: (r) =>
+            r.enable_groups.length === 0 ? (
+              <span className='text-muted-foreground text-xs'>--</span>
+            ) : (
+              <BadgeCell className='flex-wrap items-start'>
+                {r.enable_groups.map((groupName) => (
+                  <GroupBadge key={groupName} group={groupName} size='sm' />
+                ))}
+              </BadgeCell>
+            ),
         },
         {
           id: 'group_prices',

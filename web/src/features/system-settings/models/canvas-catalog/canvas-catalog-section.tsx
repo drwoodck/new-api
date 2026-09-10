@@ -69,6 +69,7 @@ function buildOverviewExportSheet(
       { header: t('画布显示名'), width: 24 },
       { header: t('模型说明'), width: 60 },
       { header: t('状态'), width: 20 },
+      { header: t('Enable Groups'), width: 24 },
       { header: t('分组价格'), width: 48 },
     ],
     rows: rows.map((row): ExcelCellValue[] => [
@@ -77,6 +78,7 @@ function buildOverviewExportSheet(
       row.display_name,
       row.description,
       formatOverviewStatus(row, mode, t),
+      row.enable_groups.join(', '),
       buildEffectivePriceSummary(row, t),
     ]),
   }

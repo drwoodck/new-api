@@ -399,12 +399,13 @@ func enrichModels(models []*model.Model) {
 			}
 		}
 
-		// 分组并集
+		// 分组并集（排序后输出，与精确匹配行的 GetModelEnableGroups 口径一致）
 		if gs, ok := groupSetByIdx[idx]; ok {
 			groups := make([]string, 0, len(gs))
 			for g := range gs {
 				groups = append(groups, g)
 			}
+			sort.Strings(groups)
 			mm.EnableGroups = groups
 		}
 

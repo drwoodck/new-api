@@ -1,5 +1,7 @@
 package model
 
+import "sort"
+
 func GetModelEnableGroups(modelName string) []string {
 	// 确保缓存最新
 	GetPricing()
@@ -14,7 +16,13 @@ func GetModelEnableGroups(modelName string) []string {
 	if !ok {
 		return make([]string, 0)
 	}
-	return groups
+	// 缓存里这一行的顺序来自 map 迭代(types.Set.Items),每次重建(每分钟)都可能
+	// 变。返回排序后的副本:界面上同一模型的分组不再跳动,调用方也拿不到可以
+	// 反过来改到缓存内部的可变切片。
+	out := make([]string, 0, len(groups))
+	out = append(out, groups...)
+	sort.Strings(out)
+	return out
 }
 
 // GetModelQuotaTypes 返回指定模型的计费类型集合（来自缓存）

@@ -188,7 +188,11 @@ type canvasCatalogOverviewRow struct {
 	MetaDisplayName string `json:"meta_display_name"`
 	// Description 是 models 表的说明(元信息页维护,目录侧只读),与
 	// GetCanvasCatalogModelAdmin 里回填的 m.Description 同源,直接取 models 行。
-	Description         string                            `json:"description"`
+	Description string `json:"description"`
+	// EnableGroups 与元信息页「启用分组」列同源(abilities 缓存,见
+	// model.GetModelEnableGroups),两处必须一致 —— 它回答的是"哪些分组现在真的
+	// 能调用这个模型",与画布目录是否已配置无关。
+	EnableGroups        []string                          `json:"enable_groups"`
 	Contract            string                            `json:"contract"`
 	Capabilities        string                            `json:"capabilities"`
 	CatalogEnabled      bool                              `json:"catalog_enabled"`
@@ -199,8 +203,8 @@ type canvasCatalogOverviewRow struct {
 }
 
 type canvasCatalogOverviewGroupPrice struct {
-	GroupName string `json:"group_name"`
-	QuotaType int    `json:"quota_type"`
+	GroupName string   `json:"group_name"`
+	QuotaType int      `json:"quota_type"`
 	Price     *float64 `json:"price"`
 	// PriceTiers 档位计费的档表（原价）。非 nil 时该分组的计费以档表为准，
 	// 展示层据此显示"档表 ×N"徽章而非单值价格。
@@ -305,7 +309,11 @@ func GetCanvasCatalogOverviewAdmin(c *gin.Context) {
 		mm, hasModel := modelByName[name]
 		cr, hasCatalog := catalogByRemoteID[name]
 
-		row := canvasCatalogOverviewRow{ModelName: name}
+		// 与元信息页同一个取值函数:两页的「启用分组」必须逐字一致,不能各算一遍。
+		row := canvasCatalogOverviewRow{
+			ModelName:    name,
+			EnableGroups: model.GetModelEnableGroups(name),
+		}
 		if hasModel {
 			row.ModelID = mm.Id
 			row.ModelStatus = mm.Status

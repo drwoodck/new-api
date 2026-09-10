@@ -32,11 +32,15 @@ func setupCatalogOverviewTestDB(t *testing.T) *gin.Engine {
 	original := model.DB
 	t.Cleanup(func() {
 		model.DB = original
+		// 定价缓存是进程级全局状态,里面挂着上一个用例的库算出来的分组关系。
+		// 换库后必须失效,否则「启用分组」这类读缓存的列会拿到别的用例的数据。
+		model.InvalidatePricingCache()
 		if sqlDB, err := db.DB(); err == nil {
 			sqlDB.Close()
 		}
 	})
 	model.DB = db
+	model.InvalidatePricingCache()
 	require.NoError(t, db.AutoMigrate(
 		&model.Ability{}, &model.Model{}, &model.CanvasCatalogModel{}, &model.ModelGroupPrice{},
 		&model.Channel{},
@@ -135,6 +139,35 @@ func TestCatalogOverviewCarriesModelMetaDisplayNameAndDescription(t *testing.T) 
 	assert.Empty(t, byName["unconfigured-model"].DisplayName, "没有目录条目就没有目录显示名")
 	assert.Equal(t, "未配置的显示名", byName["unconfigured-model"].MetaDisplayName)
 	assert.Equal(t, "未配置的说明", byName["unconfigured-model"].Description)
+}
+
+// TestCatalogOverviewEnableGroupsMatchModelsMeta 画布目录的「启用分组」列与
+// 元信息页的那一列必须是同一个答案 —— 两页读的是同一份 abilities 缓存,
+// 各算一遍迟早对不上。这里直接把两边取出来的值摆在一起比。
+func TestCatalogOverviewEnableGroupsMatchModelsMeta(t *testing.T) {
+	router := setupCatalogOverviewTestDB(t)
+
+	model.DB.Create(&model.Ability{Group: "vip", Model: "multi-group-model", ChannelId: 1, Enabled: true})
+	model.DB.Create(&model.Ability{Group: "default", Model: "multi-group-model", ChannelId: 1, Enabled: true})
+	// 停用的 ability 不参与:它不代表任何分组现在能调用这个模型。
+	model.DB.Create(&model.Ability{Group: "retired", Model: "multi-group-model", ChannelId: 1, Enabled: false})
+	// 元信息行:两边比较的前提是元信息页确实有这个模型。
+	require.NoError(t, (&model.Model{ModelName: "multi-group-model", Status: 1}).Insert())
+
+	rows := getOverview(t, router)
+	byName := make(map[string]canvasCatalogOverviewRow, len(rows))
+	for _, r := range rows {
+		byName[r.ModelName] = r
+	}
+	require.Contains(t, byName, "multi-group-model")
+	assert.Equal(t, []string{"default", "vip"}, byName["multi-group-model"].EnableGroups)
+
+	metaRows, _, err := model.SearchModels("multi-group-model", "", "", "", 0, 10)
+	require.NoError(t, err)
+	require.Len(t, metaRows, 1)
+	enrichModels(metaRows)
+	assert.Equal(t, metaRows[0].EnableGroups, byName["multi-group-model"].EnableGroups,
+		"画布目录与元信息页的启用分组必须逐字一致(含顺序)")
 }
 
 // TestCatalogOverviewIncludesCatalogRowsMissingFromAbilities 锁住"取并集,
