@@ -57,24 +57,51 @@ type candidate struct {
 }
 
 func main() {
-	canvasDir := flag.String("canvas", "", "画布项目根目录路径")
+	canvasDir := flag.String("canvas", "", "画布仓库根目录(取其 src-tauri/profiles)")
+	profilesDir := flag.String("profiles", "", "直接指定 profiles 目录(内含 providers/ 与 endpoints/)")
 	dryRun := flag.Bool("dry-run", false, "只报告将要写入的内容,不实际写库")
 	flag.Parse()
 
-	if *canvasDir == "" {
-		fmt.Println("用法: go run scripts/import_param_schemas.go -canvas E:\\githubxiangmu\\myhuabua [-dry-run]")
+	resolved, err := resolveProfilesDir(*canvasDir, *profilesDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	if err := run(*canvasDir, *dryRun); err != nil {
+	if err := run(resolved, *dryRun); err != nil {
 		fmt.Fprintf(os.Stderr, "\n错误: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(canvasDir string, dryRun bool) error {
-	profilesDir := filepath.Join(canvasDir, "src-tauri", "profiles")
+// resolveProfilesDir 从两个入口里二选一定出 profiles 目录,并确认结构完整。
+//
+// 需要 -profiles 这个入口是因为部署形态:中转站跑在服务器上,而服务器上
+// 通常只有中转站源码、没有画布仓库。让运维为了几个 TOML 去 clone 整个
+// 桌面端仓库没道理,直接把 profiles 目录传上去指过来即可。
+func resolveProfilesDir(canvasDir, profilesDir string) (string, error) {
+	switch {
+	case canvasDir == "" && profilesDir == "":
+		return "", fmt.Errorf("用法(二选一):\n" +
+			"  -canvas <画布仓库根目录>    本地开发用,脚本自动取其 src-tauri/profiles\n" +
+			"  -profiles <profiles 目录>   服务器部署用,只需上传 profiles 这一个目录\n" +
+			"可加 -dry-run 先看将要写入什么")
+	case canvasDir != "" && profilesDir != "":
+		return "", fmt.Errorf("-canvas 与 -profiles 只能给一个")
+	case canvasDir != "":
+		profilesDir = filepath.Join(canvasDir, "src-tauri", "profiles")
+	}
 
+	for _, sub := range []string{"providers", "endpoints"} {
+		info, err := os.Stat(filepath.Join(profilesDir, sub))
+		if err != nil || !info.IsDir() {
+			return "", fmt.Errorf("%s 下找不到 %s/ 目录 —— 确认路径指向的是画布的 profiles 目录(它应当直接包含 providers/ 与 endpoints/)", profilesDir, sub)
+		}
+	}
+	return profilesDir, nil
+}
+
+func run(profilesDir string, dryRun bool) error {
 	// 1) provider 表:画布内部 id -> 中转站 remote_id
 	idToRemote, err := loadProviderIDs(filepath.Join(profilesDir, "providers"))
 	if err != nil {
