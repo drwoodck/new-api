@@ -25,7 +25,12 @@ RUN go mod download
 
 COPY . .
 COPY --from=builder /build/web/dist ./web/dist
-RUN go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api
+# GIT_REVISION / GIT_BUILD_TIME 由 build-arg 传入,缺省保持 unknown。
+# 刻意用 unknown 而不是回退到某个猜测值:镜像里的代码与某个提交对不上时,
+# 显示一个可能是假的版本号比显示 unknown 更危险。
+ARG GIT_REVISION=unknown
+ARG GIT_BUILD_TIME=unknown
+RUN go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)' -X 'github.com/QuantumNous/new-api/common.GitRevision=${GIT_REVISION}' -X 'github.com/QuantumNous/new-api/common.GitBuildTime=${GIT_BUILD_TIME}'" -o new-api
 
 FROM debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a
 

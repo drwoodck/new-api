@@ -12,6 +12,15 @@ import (
 
 var StartTime = time.Now().Unix() // unit: second
 var Version = "v0.0.0"            // this hard coding will be replaced automatically when building, no need to manually change
+
+// GitRevision / GitBuildTime 由构建时经 -ldflags -X 注入(见 Dockerfile 的
+// GIT_REVISION / GIT_BUILD_TIME build-arg),默认 unknown。
+//
+// 与 Version 的分工:Version 来自仓库里手工 bump 的 VERSION 文件,只能说清
+// "基于上游哪个版本";这两个由构建环境自动生成,用来把线上二进制反查到本
+// fork 的具体提交 —— 镜像重建后光看 Version 是查不出这一层的。
+var GitRevision = "unknown"
+var GitBuildTime = "unknown"
 var SystemName = "New API"
 var Footer = ""
 var Logo = ""

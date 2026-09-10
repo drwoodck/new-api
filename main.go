@@ -64,7 +64,7 @@ func main() {
 		return
 	}
 
-	common.SysLog("New API " + common.Version + " started")
+	common.SysLog("New API " + common.Version + " (git " + common.GitRevision + ", built " + common.GitBuildTime + ") started")
 	if os.Getenv("GIN_MODE") != "debug" {
 		gin.SetMode(gin.ReleaseMode)
 	}
