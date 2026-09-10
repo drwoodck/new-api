@@ -42,7 +42,14 @@ func setupCatalogGroupFilterTestDB(t *testing.T, effectiveGroup string) *gin.Eng
 		}
 	})
 	model.DB = db
-	require.NoError(t, db.AutoMigrate(&model.CanvasCatalogModel{}, &model.Ability{}))
+	require.NoError(t, db.AutoMigrate(&model.CanvasCatalogModel{}, &model.Ability{}, &model.Channel{}))
+	// GetGroupEnabledModels 是 abilities INNER JOIN channels 且只认 status=1;
+	// 下面各用例的 ability 全部 ChannelId:1,没有这条渠道行就一行都匹配不到 ——
+	// 分组过滤会退化成 fail-open,「不在可用集里」的那条断言必然失败。
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 1, Key: "group-filter-key", Status: common.ChannelStatusEnabled,
+		Name: "group-filter-channel",
+	}).Error)
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {

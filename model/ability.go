@@ -50,7 +50,11 @@ func GetGroupEnabledModels(group string) ([]string, error) {
 	var models []string
 	err := DB.Table("abilities").
 		Joins("INNER JOIN channels ON abilities.channel_id = channels.id").
-		Where(commonGroupCol+" = ? AND abilities.enabled = ? AND channels.status = ?", group, true, 1).
+		// 列名必须带 abilities. 前缀:channels 也有 group 列,JOIN 之后未限定的
+		// commonGroupCol 是歧义列名(MySQL 1052 / SQLite "ambiguous column name"),
+		// 会让这句 SQL 恒报错、本函数恒返回空集 —— 而调用方正是靠 error 区分
+		// 「真的没有可用模型」与「查询失败」,一旦恒错,/v1/models 就恒空。
+		Where("abilities."+commonGroupCol+" = ? AND abilities.enabled = ? AND channels.status = ?", group, true, 1).
 		Distinct("abilities.model").
 		Pluck("abilities.model", &models).Error
 	if err != nil {

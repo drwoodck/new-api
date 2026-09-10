@@ -61,6 +61,26 @@ func setupModelListControllerTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+// seedEnabledChannels 建出各用例 ability 指向的渠道行。
+//
+// GetEnabledModels / GetGroupEnabledModels 是 abilities INNER JOIN channels
+// 且只认 status=1;夹具若只写 ChannelId 而不建渠道行,那句 SQL 一行都匹配不到,
+// /v1/models 恒空 —— 断言会以「列表为空」的形式失败,看不出真正的原因。
+//
+// 刻意不放进 setupModelListControllerTestDB:那个 setup 被 channel_* 等测试
+// 共用,它们自己要建 Id 1/2/3 的渠道,统一建会撞主键。
+func seedEnabledChannels(t *testing.T, ids ...int) {
+	t.Helper()
+	for _, id := range ids {
+		require.NoError(t, model.DB.Create(&model.Channel{
+			Id:     id,
+			Key:    fmt.Sprintf("model-list-key-%d", id),
+			Status: common.ChannelStatusEnabled,
+			Name:   fmt.Sprintf("model-list-channel-%d", id),
+		}).Error)
+	}
+}
+
 func initModelListColumnNames(t *testing.T) {
 	t.Helper()
 
@@ -183,6 +203,7 @@ func decodeUserModelsResponse(t *testing.T, recorder *httptest.ResponseRecorder)
 
 func TestGetUserModelsFiltersByRequestedGroup(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
+	seedEnabledChannels(t, 1)
 	require.NoError(t, db.Create(&model.User{
 		Id:       1002,
 		Username: "playground-model-user",
@@ -237,6 +258,7 @@ func TestGetUserModelsExpandsAutoGroupsInConfiguredOrder(t *testing.T) {
 	})
 
 	db := setupModelListControllerTestDB(t)
+	seedEnabledChannels(t, 1, 2)
 	require.NoError(t, db.Create(&model.User{
 		Id:       1003,
 		Username: "playground-auto-model-user",
@@ -277,6 +299,7 @@ func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 	})
 
 	db := setupModelListControllerTestDB(t)
+	seedEnabledChannels(t, 1)
 	require.NoError(t, db.Create(&model.User{
 		Id:       1001,
 		Username: "model-list-user",
@@ -403,6 +426,7 @@ func TestListModelsTokenLimitIncludesTieredBillingModel(t *testing.T) {
 		"zz-token-tiered-empty-expr-model": "",
 	})
 	db := setupModelListControllerTestDB(t)
+	seedEnabledChannels(t, 1)
 	require.NoError(t, db.Create(&[]model.Ability{
 		{Group: "default", Model: "zz-token-tiered-visible-model", ChannelId: 1, Enabled: true},
 		{Group: "default", Model: "zz-token-tiered-empty-expr-model", ChannelId: 1, Enabled: true},
@@ -446,6 +470,7 @@ func TestListModelsTokenLimitUsesResolvedCustomAutoGroups(t *testing.T) {
 	})
 
 	db := setupModelListControllerTestDB(t)
+	seedEnabledChannels(t, 1)
 	require.NoError(t, db.Create(&[]model.Ability{
 		{Group: "vip", Model: "zz-vip-allowed", ChannelId: 1, Enabled: true},
 		{Group: "vip", Model: "zz-vip-denied", ChannelId: 1, Enabled: true},

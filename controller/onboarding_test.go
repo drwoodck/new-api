@@ -35,6 +35,7 @@ func setupOnboardingTestDB(t *testing.T) *gin.Engine {
 		&model.CanvasCatalogModel{},
 		&model.ModelGroupPrice{},
 		&model.Ability{},
+		&model.Channel{},
 		&model.Option{},
 	))
 
@@ -83,8 +84,30 @@ func setupOnboardingTestDB(t *testing.T) *gin.Engine {
 
 func seedOnboardingAbility(t *testing.T, modelName string, channelID int) {
 	t.Helper()
+	seedOnboardingChannel(t, channelID)
 	ability := model.Ability{Group: "default", Model: modelName, ChannelId: channelID, Enabled: true}
 	require.NoError(t, model.DB.Create(&ability).Error)
+}
+
+// seedOnboardingChannel 保证 ability 指向的渠道存在。
+//
+// onboarding 的「已启用模型」集合走 GetEnabledModels(),它是
+// abilities INNER JOIN channels 且只认 status=1。只建 ability 不建渠道,
+// 那句 SQL 匹配不到任何行,集合恒空 —— 所有依赖它的断言都会假性失败。
+// 用存在性判断而不是直接 Create:同一用例可能给同一渠道建多条 ability。
+func seedOnboardingChannel(t *testing.T, id int) {
+	t.Helper()
+	var existing int64
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", id).Count(&existing).Error)
+	if existing > 0 {
+		return
+	}
+	require.NoError(t, model.DB.Create(&model.Channel{
+		Id:     id,
+		Key:    fmt.Sprintf("onboarding-key-%d", id),
+		Status: common.ChannelStatusEnabled,
+		Name:   fmt.Sprintf("onboarding-channel-%d", id),
+	}).Error)
 }
 
 func seedOnboardingModelMeta(t *testing.T, modelName string, status int) {
