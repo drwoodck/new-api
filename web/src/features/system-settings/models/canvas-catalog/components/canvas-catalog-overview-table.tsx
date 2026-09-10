@@ -21,10 +21,13 @@ import { useTranslation } from 'react-i18next'
 
 import { BadgeCell } from '@/components/data-table/core/badge-cell'
 import { StaticDataTable } from '@/components/data-table/static/static-data-table'
-import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/status-badge'
+import { Button } from '@/components/ui/button'
 
-import type { CanvasCatalogOverviewRow } from '../types'
+import type {
+  CanvasCatalogOverviewGroupPrice,
+  CanvasCatalogOverviewRow,
+} from '../types'
 
 type CanvasCatalogOverviewTableProps = {
   rows: CanvasCatalogOverviewRow[]
@@ -51,6 +54,34 @@ function formatGroupPrice(t: (key: string) => string, price: number | null) {
   return price.toString()
 }
 
+/**
+ * 一个分组价格在总览里的展示文案。表格徽标、对话框的「当前计费」预览、
+ * Excel 导出三处共用这一份 —— 导出的必须是屏幕上看到的那行字。
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function formatOverviewGroupPrice(
+  gp: CanvasCatalogOverviewGroupPrice,
+  t: (key: string) => string
+): string {
+  const tierCount = gp.price_tiers?.length ?? 0
+  if (tierCount > 0) return `${gp.group_name}: ${t('档表')} ×${tierCount}`
+  return `${gp.group_name}: ${formatGroupPrice(t, gp.price)}`
+}
+
+/** 状态列的纯文本口径(徽标渲染不出「模型启用 / 目录上架」这一行字)。 */
+// eslint-disable-next-line react-refresh/only-export-components
+export function formatOverviewStatus(
+  row: CanvasCatalogOverviewRow,
+  mode: 'configured' | 'unconfigured',
+  t: (key: string) => string
+): string {
+  const parts = [row.model_status === 1 ? t('模型启用') : t('模型停用')]
+  if (mode === 'configured') {
+    parts.push(row.catalog_enabled ? t('目录上架') : t('目录下架'))
+  }
+  return parts.join(' / ')
+}
+
 export function CanvasCatalogOverviewTable(
   props: CanvasCatalogOverviewTableProps
 ) {
@@ -67,20 +98,32 @@ export function CanvasCatalogOverviewTable(
           id: 'model_name',
           header: t('中转站模型名'),
           cellClassName: 'font-mono text-xs',
+          wrap: true,
           cell: (r) => r.model_name,
         },
         {
           id: 'model_id',
           header: t('模型 ID'),
           cellClassName: 'text-muted-foreground text-xs',
-          cell: (r) =>
-            r.model_id > 0 ? r.model_id : t('未建模型行'),
+          cell: (r) => (r.model_id > 0 ? r.model_id : t('未建模型行')),
         },
         {
           id: 'display_name',
           header: t('画布显示名'),
           cellClassName: 'font-medium',
+          wrap: true,
           cell: (r) => r.display_name || '--',
+        },
+        {
+          // 说明真源在 models 表(元信息页维护),目录侧只读,这里同步展示。
+          id: 'description',
+          header: t('模型说明'),
+          cellClassName: 'text-muted-foreground text-xs',
+          wrap: true,
+          cell: (r) =>
+            r.description || (
+              <span className='text-muted-foreground text-xs'>--</span>
+            ),
         },
         {
           id: 'status',
@@ -112,14 +155,10 @@ export function CanvasCatalogOverviewTable(
               ) : (
                 r.group_prices.map((gp) => {
                   const tierCount = gp.price_tiers?.length ?? 0
-                  const label =
-                    tierCount > 0
-                      ? `${gp.group_name}: ${t('档表')} ×${tierCount}`
-                      : `${gp.group_name}: ${formatGroupPrice(t, gp.price)}`
                   return (
                     <StatusBadge
                       key={gp.group_name}
-                      label={label}
+                      label={formatOverviewGroupPrice(gp, t)}
                       variant={
                         gp.price == null && tierCount === 0
                           ? 'warning'

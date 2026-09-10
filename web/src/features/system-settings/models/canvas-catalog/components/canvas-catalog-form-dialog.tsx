@@ -55,6 +55,7 @@ import {
   useUpdateCanvasCatalogModel,
 } from '../hooks/use-canvas-catalog-mutations'
 import { useContractStats } from '../hooks/use-contract-stats'
+import type { CanvasCatalogModelMeta } from '../types'
 import { SchemaOverrideEditor } from './schema-override/schema-override-editor'
 
 type CanvasCatalogFormDialogProps = {
@@ -72,6 +73,9 @@ type CanvasCatalogFormDialogProps = {
   // 传入(该行口径),空/undefined 时不渲染。对话框内部 GET :id 拿到的全量
   // 条目不含分别定价数据,所以不在此处新拉接口。
   effectivePriceSummary?: string
+  // 元信息页(models 表)的显示名/说明,按 remote_id 索引。新建时用它预填
+  // 「显示名称」并展示「说明」—— 编辑时这两项由 GET :id 自己回填。
+  modelMetaByRemoteId?: Record<string, CanvasCatalogModelMeta>
 }
 
 const FORM_ID = 'canvas-catalog-mutate-form'
@@ -139,6 +143,7 @@ export function CanvasCatalogFormDialog({
   editingId,
   prefillRemoteId,
   effectivePriceSummary,
+  modelMetaByRemoteId,
 }: CanvasCatalogFormDialogProps) {
   const { t } = useTranslation()
   const isEdit = Boolean(editingId)
@@ -158,6 +163,15 @@ export function CanvasCatalogFormDialog({
   // 只在「新建 + 管理员还没手动碰过 contract 字段」时才自动预填 —— 一旦手改
   // 过(逃生舱),或是编辑既有条目(已经有权威值),都不再覆盖。
   const contractManuallyEdited = useRef(false)
+  // 上一次由元信息自动填入的显示名,用来区分「管理员手填」与「我们填的」。
+  const autoFilledDisplayName = useRef<string | null>(null)
+
+  // 元信息页给这个 remote_id 填过的显示名/说明。手动新增条目时 remote_id 是
+  // 逐字敲的,所以用 watch 订阅 —— 名字对上的那一刻就把显示名带进来。
+  const remoteIdValue = form.watch('remote_id')
+  const remoteIdMeta = isEdit ? undefined : modelMetaByRemoteId?.[remoteIdValue]
+  const metaDisplayName = remoteIdMeta?.display_name ?? ''
+  const metaDescription = remoteIdMeta?.description ?? ''
 
   // 契约名 → 支持率文案。摸底确认后按「字段下方提示列表」渲染,而非选项后缀。
   // 「没有任何客户端支持」必须显式显示为 0/N,不能留空 —— 那正是这个功能
@@ -194,8 +208,20 @@ export function CanvasCatalogFormDialog({
     } else if (open && !isEdit) {
       form.reset({ ...EMPTY_VALUES, remote_id: prefillRemoteId || '' })
       contractManuallyEdited.current = false
+      autoFilledDisplayName.current = null
     }
   }, [open, isEdit, currentModel, prefillRemoteId, form])
+
+  // 只在字段还是空的、或当前值正是上一次自动填入的那个值时才覆盖 ——
+  // 管理员手改过就再也不回写(与 contract 的逃生舱同一口径)。
+  useEffect(() => {
+    if (isEdit || !metaDisplayName) return
+    const current = form.getValues('display_name')
+    if (current !== '' && current !== autoFilledDisplayName.current) return
+    if (current === metaDisplayName) return
+    form.setValue('display_name', metaDisplayName)
+    autoFilledDisplayName.current = metaDisplayName
+  }, [isEdit, metaDisplayName, form])
 
   // 编辑加载失败时表单只会渲染空默认值,必须显式告知并禁止提交,避免把
   // 空表单当新条目保存而静默清掉原配置。
@@ -478,8 +504,11 @@ export function CanvasCatalogFormDialog({
 
             <FormItem>
               <FormLabel>{t('说明')}</FormLabel>
+              {/* 编辑走 GET :id(后端已把 models 表的说明回填进 currentModel),
+                  新建时 remote_id 还没落库,只能从调用方传入的元信息里取。 */}
               <div className='text-muted-foreground rounded-md border px-3 py-2 text-sm whitespace-pre-wrap'>
                 {currentModel?.description ||
+                  metaDescription ||
                   t('暂无说明,可在模型管理页为该模型添加')}
               </div>
               <FormDescription>
@@ -500,9 +529,7 @@ export function CanvasCatalogFormDialog({
               <FormLabel>{t('价格')}</FormLabel>
               {effectivePriceSummary ? (
                 <div className='text-muted-foreground rounded-md border px-3 py-2 text-sm'>
-                  <div className='font-medium'>
-                    {t('当前计费(自动文案)')}
-                  </div>
+                  <div className='font-medium'>{t('当前计费(自动文案)')}</div>
                   <div className='whitespace-pre-wrap'>
                     {effectivePriceSummary}
                   </div>

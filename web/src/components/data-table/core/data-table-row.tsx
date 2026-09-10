@@ -68,7 +68,10 @@ function DataTableRowInner<TData>({
       {...rowProps}
     >
       {row.getVisibleCells().map((cell) => {
-        const renderedCell = renderCellContent(cell)
+        // 长文本列(说明、模型名)声明 meta.wrap:换行完整显示,不做截断,
+        // 也不套 Tooltip —— 内容本来就在格子里读得全。
+        const wrap = cell.column.columnDef.meta?.wrap === true
+        const renderedCell = renderCellContent(cell, wrap)
 
         return (
           <TableCell
@@ -76,7 +79,9 @@ function DataTableRowInner<TData>({
             data-column-id={cell.column.id}
             className={cn(
               'max-w-full min-w-0',
-              renderedCell.isPrimitive && 'overflow-hidden',
+              wrap
+                ? 'whitespace-normal break-words'
+                : renderedCell.isTruncated && 'overflow-hidden',
               getColumnClassName?.(cell.column.id, 'cell')
             )}
           >
@@ -123,19 +128,24 @@ export function DataTableRow<TData>(props: DataTableRowProps<TData>) {
   )
 }
 
-function renderCellContent<TData>(cell: Cell<TData, unknown>) {
+function renderCellContent<TData>(cell: Cell<TData, unknown>, wrap: boolean) {
   const content = flexRender(cell.column.columnDef.cell, cell.getContext())
+
+  if (wrap) {
+    return { content, isTruncated: false }
+  }
+
   const textContent = getPrimitiveTextContent(content)
 
   if (!textContent) {
-    return { content, isPrimitive: false }
+    return { content, isTruncated: false }
   }
 
   return {
     content: (
       <TruncatedCell tooltipContent={textContent}>{content}</TruncatedCell>
     ),
-    isPrimitive: true,
+    isTruncated: true,
   }
 }
 

@@ -51,7 +51,12 @@ export type CanvasCatalogOverviewRow = {
   model_name: string
   model_id: number
   catalog_id: number
+  /** 画布目录条目自己的显示名(目录侧可改);未配置的模型为空。 */
   display_name: string
+  /** 元信息页(models 表)维护的显示名 —— 新增条目时用它预填表单。 */
+  meta_display_name: string
+  /** 元信息页(models 表)维护的模型说明,目录侧只读。 */
+  description: string
   contract: string
   capabilities: string
   catalog_enabled: boolean
@@ -59,6 +64,15 @@ export type CanvasCatalogOverviewRow = {
   ready: boolean
   group_pricing_enabled: boolean
   group_prices: CanvasCatalogOverviewGroupPrice[]
+}
+
+/**
+ * 一个模型在元信息页(models 表)里的展示字段。目录侧只读,用途是「新增条目」
+ * 时把管理员已经填过的显示名/说明直接带进表单,免得重打一遍、也免得两处对不上。
+ */
+export type CanvasCatalogModelMeta = {
+  display_name: string
+  description: string
 }
 
 export type CanvasCatalogOverviewGroupPrice = {

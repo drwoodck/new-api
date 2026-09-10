@@ -24,6 +24,11 @@ declare module '@tanstack/react-table' {
     description?: string
     className?: string
     pinned?: 'left' | 'right'
+    /**
+     * 让文本单元格换行完整显示,而不是截断成一行加省略号(见 DataTableRow)。
+     * 用于说明、模型名这类一截就看不出内容的长文本列。
+     */
+    wrap?: boolean
     // Mobile card list layout hints (used by MobileCardList)
     mobileTitle?: boolean // card title area (left, larger text)
     mobileBadge?: boolean // status badge alongside title (right)

@@ -18,13 +18,16 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
-import { useEffect, useMemo, useRef } from 'react'
+import { Download, Loader2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { DataTablePage, useDataTable } from '@/components/data-table'
+import { Button } from '@/components/ui/button'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
+import { exportExcel } from '@/lib/excel-export'
 
 import { getModels, searchModels, getVendors } from '../api'
 import {
@@ -33,11 +36,55 @@ import {
   getSyncStatusOptions,
 } from '../constants'
 import { modelsQueryKeys, vendorsQueryKeys } from '../lib'
+import type { Model } from '../types'
 import { DataTableBulkActions } from './data-table-bulk-actions'
-import { useModelsColumns } from './models-columns'
+import { getModelExportColumns, useModelsColumns } from './models-columns'
 import { useModels } from './models-provider'
 
 const route = getRouteApi('/_authenticated/models/$section')
+
+// 后端把 page_size 卡在 100(common.GetPageQuery),导出要拿全量只能翻页。
+// 加上限是因为导出是给人看的:上万行既没人看得完,也会把浏览器拖住。
+const EXPORT_PAGE_SIZE = 100
+const EXPORT_MAX_ROWS = 5000
+
+type ModelsExportQuery = {
+  keyword?: string
+  vendor?: string
+  status?: string
+  sync_official?: string
+}
+
+/** 按当前筛选条件翻页取回全部模型,口径与列表页完全一致。 */
+async function fetchModelsForExport(
+  query: ModelsExportQuery
+): Promise<Model[]> {
+  const useSearch = Boolean(
+    query.keyword || query.vendor || query.status || query.sync_official
+  )
+  const request = (p: number) =>
+    useSearch
+      ? searchModels({ ...query, p, page_size: EXPORT_PAGE_SIZE })
+      : getModels({
+          vendor: query.vendor,
+          status: query.status,
+          sync_official: query.sync_official,
+          p,
+          page_size: EXPORT_PAGE_SIZE,
+        })
+
+  const first = await request(1)
+  const models = [...(first.data?.items ?? [])]
+  const total = Math.min(first.data?.total ?? 0, EXPORT_MAX_ROWS)
+  const pageCount = Math.ceil(total / EXPORT_PAGE_SIZE)
+
+  for (let page = 2; page <= pageCount; page++) {
+    const response = await request(page)
+    models.push(...(response.data?.items ?? []))
+  }
+
+  return models
+}
 
 export function ModelsTable() {
   const { t } = useTranslation()
@@ -184,6 +231,43 @@ export function ModelsTable() {
   // Columns configuration
   const columns = useModelsColumns(vendors)
 
+  const [isExporting, setIsExporting] = useState(false)
+
+  // 导出当前筛选下的全部模型(不只是当前页):列表分页是浏览手段,
+  // 导出的通常是拿去核对/存档的整份数据。
+  const handleExport = async () => {
+    setIsExporting(true)
+    try {
+      const exportModels = await fetchModelsForExport({
+        keyword: globalFilter,
+        vendor: activeVendorFilter,
+        status: statusFilterValue,
+        sync_official: syncFilterValue,
+      })
+      if (exportModels.length === 0) {
+        toast.info(t('没有可导出的模型'))
+        return
+      }
+      const exportColumns = getModelExportColumns(t, vendors)
+      exportExcel(t('模型元信息'), [
+        {
+          name: t('模型元信息'),
+          columns: exportColumns.map((column) => ({
+            header: column.header,
+            width: column.width,
+          })),
+          rows: exportModels.map((model) =>
+            exportColumns.map((column) => column.value(model))
+          ),
+        },
+      ])
+    } catch (error: unknown) {
+      toast.error((error as Error)?.message || t('导出失败'))
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
   // React Table instance
   const { table } = useDataTable({
     data: models,
@@ -198,7 +282,6 @@ export function ModelsTable() {
     globalFilter,
     enableRowSelection: true,
     enableColumnResizing: true,
-    columnResizeMode: 'onChange',
     onColumnFiltersChange,
     onPaginationChange,
     onGlobalFilterChange,
@@ -234,6 +317,16 @@ export function ModelsTable() {
       toolbarProps={{
         searchPlaceholder: t('Filter by model name...'),
         searchDebounceMs: 500,
+        preActions: (
+          <Button
+            variant='outline'
+            onClick={handleExport}
+            disabled={isExporting || isLoading}
+          >
+            {isExporting ? <Loader2 className='animate-spin' /> : <Download />}
+            {t('导出 Excel')}
+          </Button>
+        ),
         filters: [
           {
             columnId: 'status',

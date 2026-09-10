@@ -16,10 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+/* eslint-disable react-refresh/only-export-components */
 import type { ColumnDef } from '@tanstack/react-table'
+import type { TFunction } from 'i18next'
+import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { BadgeCell, BadgeListCell } from '@/components/data-table'
+import { BadgeCell } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
 import { ProviderBadge } from '@/components/provider-badge'
 import { StatusBadge } from '@/components/status-badge'
@@ -31,8 +34,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import type { ExcelCellValue } from '@/lib/excel-export'
 import { formatTimestampToDate } from '@/lib/format'
-import { getLobeIcon } from '@/lib/lobe-icon'
 
 import {
   getModelStatusConfig,
@@ -40,14 +43,69 @@ import {
   getQuotaTypeConfig,
 } from '../constants'
 import { parseModelTags, formatEndpointsDisplay } from '../lib'
-import type { Model, Vendor } from '../types'
+import type { Model, PriceTierList, Vendor } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 import { DescriptionCell } from './description-cell'
 
-function getCompactModelIcon(iconKey: string) {
-  const baseIconKey = iconKey.split('.')[0]
+/**
+ * 一个价格来源(统一计价或某个分组)的展示文案:固定价 > 秒价 > 档表 > 倍率,
+ * 与计费时的优先级一致。空串表示这块没有任何价格配置。
+ */
+function formatPriceValue(source: {
+  model_price?: number | null
+  model_ratio?: number | null
+  completion_ratio?: number | null
+  video_second_price?: number | null
+  price_tiers?: PriceTierList | null
+}): string {
+  if (source.model_price && source.model_price > 0) {
+    return `$${source.model_price.toFixed(4)}`
+  }
+  if (source.video_second_price && source.video_second_price > 0) {
+    return `$${source.video_second_price.toFixed(4)}/s`
+  }
 
-  return getLobeIcon(`${baseIconKey}.Avatar.type={'platform'}`, 20)
+  const tiers = source.price_tiers ?? []
+  if (tiers.length > 0) {
+    // 档位价格字段是 price(对齐后端 types.PriceTier.Price)。
+    const prices = tiers.map((tier) => tier.price)
+    const min = Math.min(...prices)
+    const max = Math.max(...prices)
+    return min === max
+      ? `$${min.toFixed(4)}`
+      : `$${min.toFixed(4)}-$${max.toFixed(4)}`
+  }
+
+  if (source.model_ratio && source.model_ratio > 0) {
+    // completionRatio 可能是 0(有效值),不能用 && 判断。
+    const ratioText =
+      source.completion_ratio != null &&
+      source.completion_ratio !== source.model_ratio
+        ? `${source.model_ratio}/${source.completion_ratio}`
+        : `${source.model_ratio}`
+    return `${ratioText}×`
+  }
+
+  return ''
+}
+
+/**
+ * 分组分别定价下的价格行:每个已配置分组一行「分组名: 值」,没配价格的分组
+ * 不出现(它的语义是"该分组不可用该模型",不是 0 元)。表格与 Excel 导出共用。
+ */
+function buildGroupPriceLines(model: Model): string[] {
+  const lines: string[] = []
+  for (const groupPrice of model.group_prices ?? []) {
+    const value = formatPriceValue(groupPrice)
+    if (value === '') continue
+    lines.push(`${groupPrice.group_name}: ${value}`)
+  }
+  return lines
+}
+
+/** 空列表在单元格里的统一占位,与 BadgeListCell 的「-」一致。 */
+function EmptyCell() {
+  return <span className='text-muted-foreground text-xs'>-</span>
 }
 
 /**
@@ -56,6 +114,16 @@ function getCompactModelIcon(iconKey: string) {
 export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
   const { t } = useTranslation()
 
+  // 列定义引用必须稳定:DataTableRow 的 memo 比较器把列数组当作渲染身份的一部分
+  // (见 core/data-table-row.tsx),每次渲染新建数组会让每一行都跟着重渲染 ——
+  // 拖动列宽时的卡顿就是这么来的。vendors 由调用方 useMemo 固定。
+  return React.useMemo(() => buildModelsColumns(t, vendors), [t, vendors])
+}
+
+function buildModelsColumns(
+  t: TFunction,
+  vendors: Vendor[]
+): ColumnDef<Model>[] {
   // Get translated configs
   const NAME_RULE_CONFIG = getNameRuleConfig(t)
   const MODEL_STATUS_CONFIG = getModelStatusConfig(t)
@@ -102,42 +170,31 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
       size: 64,
     },
 
-    // Model Name column (with model icon and "NEW" badge)
+    // Model Name column (plain text, with "NEW" badge for recent rows)
     {
       accessorKey: 'model_name',
       header: t('Model Name'),
-      meta: { mobileTitle: true },
+      meta: { mobileTitle: true, wrap: true },
       cell: ({ row }) => {
         const model = row.original
         const name = row.getValue('model_name') as string
-        const iconKey =
-          model.icon ||
-          vendorMap[model.vendor_id || 0]?.icon ||
-          model.model_name?.[0] ||
-          'N'
-        const icon = getCompactModelIcon(iconKey)
 
         // Check if model is new (created within last 24 hours)
-        const isNew = model.created_time &&
+        const isNew =
+          model.created_time &&
           Date.now() - model.created_time * 1000 < 86400000
 
+        // 名字直接铺开写,不套徽标也不加图标:徽标内的 truncate 会把长模型名
+        // 截成省略号,而前面那个圆形图标在列表里只会看成一个多余的标识符。
         return (
-          <div className='flex max-w-full min-w-0 items-center gap-2'>
-            <div className='flex size-5 shrink-0 items-center justify-center overflow-hidden'>
-              {icon}
-            </div>
-            <StatusBadge
-              label={name}
-              variant='neutral'
-              copyText={name}
-              size='sm'
-              className='-ml-1.5 font-mono'
-            />
+          <div className='flex min-w-0 flex-wrap items-center gap-1.5 font-mono text-sm break-all'>
+            {name}
             {isNew && (
               <StatusBadge
                 label={t('新')}
                 variant='success'
                 size='sm'
+                copyable={false}
                 className='shrink-0'
               />
             )}
@@ -273,10 +330,29 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
       enableSorting: false,
     },
 
+    // Display Name column — the friendly name typed in the edit drawer, and the
+    // one the canvas catalog pre-fills its "显示名称" field from.
+    {
+      accessorKey: 'display_name',
+      header: t('Display Name'),
+      meta: { wrap: true },
+      cell: ({ row }) => {
+        const displayName = row.getValue('display_name') as string | undefined
+        if (!displayName) {
+          return <span className='text-muted-foreground text-xs'>-</span>
+        }
+        return <div className='text-sm break-words'>{displayName}</div>
+      },
+      size: 180,
+      minSize: 120,
+      enableSorting: false,
+    },
+
     // Description column
     {
       accessorKey: 'description',
       header: t('Description'),
+      meta: { wrap: true },
       cell: ({ row }) => {
         const description = row.getValue('description') as string
         const modelName = row.getValue('model_name') as string
@@ -290,86 +366,44 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
       enableSorting: false,
     },
 
-    // Price column
+    // Price column — 分组分别定价时把每个已配置分组各列一行。只显示第一个
+    // 再标「(+N)」等于把大部分价格藏起来,核对计费时看不到实际数字。
     {
       accessorKey: 'model_price',
       header: t('Price'),
+      meta: { wrap: true },
       cell: ({ row }) => {
         const model = row.original
+        const groupLines = model.group_pricing_enabled
+          ? buildGroupPriceLines(model)
+          : []
 
-        // 1. 优先显示分组价格（如果启用了分组定价）
-        if (model.group_pricing_enabled && model.group_prices && model.group_prices.length > 0) {
-          // 找到所有配置了价格的分组
-          const groupsWithPrice = model.group_prices.filter(gp => {
-            return (gp.model_price && gp.model_price > 0) ||
-                   (gp.video_second_price && gp.video_second_price > 0) ||
-                   (gp.price_tiers && gp.price_tiers.length > 0) ||
-                   (gp.model_ratio && gp.model_ratio > 0)
-          })
-
-          if (groupsWithPrice.length > 0) {
-            // 显示第一个分组的价格，并标注分组数量
-            const firstGroup = groupsWithPrice[0]
-            let priceText = ''
-
-            if (firstGroup.model_price && firstGroup.model_price > 0) {
-              priceText = `$${firstGroup.model_price.toFixed(4)}`
-            } else if (firstGroup.video_second_price && firstGroup.video_second_price > 0) {
-              priceText = `$${firstGroup.video_second_price.toFixed(4)}/s`
-            } else if (firstGroup.price_tiers && firstGroup.price_tiers.length > 0) {
-              const prices = firstGroup.price_tiers.map(t => t.price_per_unit)
-              const min = Math.min(...prices)
-              const max = Math.max(...prices)
-              priceText = min === max ? `$${min.toFixed(4)}` : `$${min.toFixed(4)}-$${max.toFixed(4)}`
-            } else if (firstGroup.model_ratio && firstGroup.model_ratio > 0) {
-              const ratioText =
-                firstGroup.completion_ratio != null && firstGroup.completion_ratio !== firstGroup.model_ratio
-                  ? `${firstGroup.model_ratio}/${firstGroup.completion_ratio}`
-                  : `${firstGroup.model_ratio}`
-              priceText = `${ratioText}×`
-            }
-
-            return (
-              <div className='flex items-center gap-1'>
-                <span className='font-mono text-sm whitespace-nowrap'>{priceText}</span>
-                {groupsWithPrice.length > 1 && (
-                  <span className='text-xs text-muted-foreground'>
-                    (+{groupsWithPrice.length - 1})
-                  </span>
-                )}
-              </div>
-            )
-          }
-        }
-
-        // 2. 回退到统一定价
-        const modelPrice = model.model_price
-        const modelRatio = model.model_ratio
-        const completionRatio = model.completion_ratio
-
-        // Display price information
-        if (modelPrice && modelPrice > 0) {
+        if (groupLines.length > 0) {
           return (
-            <div className='font-mono text-sm whitespace-nowrap'>
-              ${modelPrice.toFixed(4)}
-            </div>
-          )
-        } else if (modelRatio && modelRatio > 0) {
-          // 检查 completionRatio 是否存在且与 modelRatio 不同
-          // 注意：completionRatio 可能是 0（有效值），不能用 && 判断
-          const ratioText =
-            completionRatio != null && completionRatio !== modelRatio
-              ? `${modelRatio}/${completionRatio}`
-              : `${modelRatio}`
-          return (
-            <div className='font-mono text-sm whitespace-nowrap'>
-              {ratioText}×
+            <div className='flex flex-col gap-0.5 font-mono text-xs'>
+              {groupLines.map((line) => (
+                <span key={line} className='break-all whitespace-normal'>
+                  {line}
+                </span>
+              ))}
             </div>
           )
         }
-        return <span className='text-muted-foreground text-xs'>-</span>
+
+        // 未开分组定价(或开了但一个分组都没配价格)时回退到统一价。
+        const priceText = formatPriceValue(model)
+        if (priceText === '') {
+          return <span className='text-muted-foreground text-xs'>-</span>
+        }
+
+        return (
+          <div className='font-mono text-sm break-all whitespace-normal'>
+            {priceText}
+          </div>
+        )
       },
-      size: 120,
+      size: 150,
+      minSize: 120,
       enableSorting: false,
     },
 
@@ -377,40 +411,43 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
     {
       accessorKey: 'tags',
       header: t('Tags'),
-      meta: { mobileHidden: true },
+      meta: { mobileHidden: true, wrap: true },
       cell: ({ row }) => {
         const tags = row.getValue('tags') as string
         const tagArray = parseModelTags(tags)
+        if (tagArray.length === 0) return <EmptyCell />
         return (
-          <BadgeListCell
-            items={tagArray.map((tag) => (
+          <BadgeCell className='flex-wrap items-start'>
+            {tagArray.map((tag) => (
               <StatusBadge key={tag} label={tag} autoColor={tag} size='sm' />
             ))}
-          />
+          </BadgeCell>
         )
       },
-      size: 100,
+      size: 120,
+      minSize: 80,
       enableSorting: false,
     },
 
-    // Endpoints column
+    // Endpoints column — 全部列出,不做「+N」折叠,否则导出/核对时看不全。
     {
       accessorKey: 'endpoints',
       header: t('Endpoints'),
-      meta: { mobileHidden: true },
+      meta: { mobileHidden: true, wrap: true },
       cell: ({ row }) => {
         const endpoints = row.getValue('endpoints') as string
         const endpointArray = formatEndpointsDisplay(endpoints)
+        if (endpointArray.length === 0) return <EmptyCell />
         return (
-          <BadgeListCell
-            max={3}
-            items={endpointArray.map((ep) => (
+          <BadgeCell className='flex-wrap items-start'>
+            {endpointArray.map((ep) => (
               <StatusBadge key={ep} label={ep} autoColor={ep} size='sm' />
             ))}
-          />
+          </BadgeCell>
         )
       },
       size: 200,
+      minSize: 120,
       enableSorting: false,
     },
 
@@ -418,7 +455,7 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
     {
       accessorKey: 'bound_channels',
       header: t('Bound Channels'),
-      meta: { mobileHidden: true },
+      meta: { mobileHidden: true, wrap: true },
       cell: ({ row }) => {
         const channels = row.getValue('bound_channels') as Array<{
           id: number
@@ -426,9 +463,10 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
           type?: number
           status?: number
         }>
+        if (!channels || channels.length === 0) return <EmptyCell />
         return (
-          <BadgeListCell
-            items={(channels ?? []).map((c) => (
+          <BadgeCell className='flex-wrap items-start'>
+            {channels.map((c) => (
               <StatusBadge
                 key={c.id}
                 label={`${c.name} (${c.type})`}
@@ -436,10 +474,11 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
                 size='sm'
               />
             ))}
-          />
+          </BadgeCell>
         )
       },
-      size: 150,
+      size: 200,
+      minSize: 120,
       enableSorting: false,
     },
 
@@ -447,19 +486,20 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
     {
       accessorKey: 'enable_groups',
       header: t('Enable Groups'),
-      meta: { mobileHidden: true },
+      meta: { mobileHidden: true, wrap: true },
       cell: ({ row }) => {
         const groups = row.getValue('enable_groups') as string[]
+        if (!groups || groups.length === 0) return <EmptyCell />
         return (
-          <BadgeListCell
-            max={3}
-            items={(groups ?? []).map((g) => (
+          <BadgeCell className='flex-wrap items-start'>
+            {groups.map((g) => (
               <GroupBadge key={g} group={g} size='sm' />
             ))}
-          />
+          </BadgeCell>
         )
       },
       size: 200,
+      minSize: 120,
       enableSorting: false,
     },
 
@@ -467,12 +507,13 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
     {
       accessorKey: 'quota_types',
       header: t('Quota Types'),
-      meta: { mobileHidden: true },
+      meta: { mobileHidden: true, wrap: true },
       cell: ({ row }) => {
         const quotaTypes = row.getValue('quota_types') as number[]
+        if (!quotaTypes || quotaTypes.length === 0) return <EmptyCell />
         return (
-          <BadgeListCell
-            items={(quotaTypes ?? []).map((qt) => {
+          <BadgeCell className='flex-wrap items-start'>
+            {quotaTypes.map((qt) => {
               const config = QUOTA_TYPE_CONFIG[qt]
               return (
                 <StatusBadge
@@ -490,10 +531,11 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
                 />
               )
             })}
-          />
+          </BadgeCell>
         )
       },
       size: 150,
+      minSize: 100,
       enableSorting: false,
     },
 
@@ -568,6 +610,125 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
       enableSorting: false,
       enableHiding: false,
       meta: { pinned: 'right' as const },
+    },
+  ]
+}
+
+export type ModelExportColumn = {
+  header: string
+  /** 列宽,单位约等于字符数(见 lib/excel-export)。 */
+  width: number
+  value: (model: Model) => ExcelCellValue
+}
+
+/**
+ * 元信息页 Excel 导出的列。与上面这张表的列一一对应(含默认隐藏的列),
+ * 取值口径也复用同一批 helper/配置 —— 导出的是这张表的数据,不是另一套数字。
+ * 表的列有增减时这里要跟着改。
+ */
+export function getModelExportColumns(
+  t: TFunction,
+  vendors: Vendor[] = []
+): ModelExportColumn[] {
+  const NAME_RULE_CONFIG = getNameRuleConfig(t)
+  const MODEL_STATUS_CONFIG = getModelStatusConfig(t)
+  const QUOTA_TYPE_CONFIG = getQuotaTypeConfig(t)
+  const vendorMap: Record<number, Vendor> = {}
+  for (const vendor of vendors) vendorMap[vendor.id] = vendor
+
+  return [
+    { header: t('ID'), width: 8, value: (model) => model.id },
+    { header: t('Model Name'), width: 32, value: (model) => model.model_name },
+    {
+      header: t('Display Name'),
+      width: 24,
+      value: (model) => model.display_name ?? '',
+    },
+    {
+      header: t('Match Type'),
+      width: 16,
+      value: (model) => {
+        const label = NAME_RULE_CONFIG[model.name_rule as 0 | 1 | 2 | 3]?.label
+        if (!label) return ''
+        return model.name_rule !== 0 && model.matched_count
+          ? `${label} (${model.matched_count})`
+          : label
+      },
+    },
+    {
+      header: t('Status'),
+      width: 10,
+      value: (model) => MODEL_STATUS_CONFIG[model.status as 0 | 1]?.label ?? '',
+    },
+    {
+      header: t('Vendor'),
+      width: 16,
+      value: (model) => vendorMap[model.vendor_id ?? 0]?.name ?? '',
+    },
+    {
+      header: t('Description'),
+      width: 48,
+      value: (model) => model.description ?? '',
+    },
+    {
+      header: t('Price'),
+      width: 24,
+      value: (model) => {
+        const groupLines = model.group_pricing_enabled
+          ? buildGroupPriceLines(model)
+          : []
+        return groupLines.length > 0
+          ? groupLines.join(' / ')
+          : formatPriceValue(model)
+      },
+    },
+    {
+      header: t('Tags'),
+      width: 20,
+      value: (model) => parseModelTags(model.tags ?? '').join(', '),
+    },
+    {
+      header: t('Endpoints'),
+      width: 28,
+      value: (model) =>
+        formatEndpointsDisplay(model.endpoints ?? '').join(', '),
+    },
+    {
+      header: t('Bound Channels'),
+      width: 28,
+      value: (model) =>
+        (model.bound_channels ?? [])
+          .map((channel) => `${channel.name} (${channel.type})`)
+          .join(', '),
+    },
+    {
+      header: t('Enable Groups'),
+      width: 20,
+      value: (model) => (model.enable_groups ?? []).join(', '),
+    },
+    {
+      header: t('Quota Types'),
+      width: 16,
+      value: (model) =>
+        (model.quota_types ?? [])
+          .map((quotaType) => QUOTA_TYPE_CONFIG[quotaType]?.label ?? quotaType)
+          .join(', '),
+    },
+    {
+      header: t('Official Sync'),
+      width: 12,
+      value: (model) =>
+        model.sync_official === 1 ? t('Official Sync') : t('No Sync'),
+    },
+    {
+      header: t('Created'),
+      width: 20,
+      value: (model) => formatTimestampToDate(model.created_time),
+    },
+    {
+      header: t('Updated'),
+      width: 20,
+      value: (model) => formatTimestampToDate(model.updated_time),
     },
   ]
 }

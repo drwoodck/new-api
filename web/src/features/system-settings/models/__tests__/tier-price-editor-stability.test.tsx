@@ -1,3 +1,4 @@
+import { render, screen } from '@testing-library/react'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -17,8 +18,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import React from 'react'
-
-import { render, screen } from '@testing-library/react'
 import { beforeAll, describe, expect, test, vi } from 'vitest'
 
 import { TierPriceEditor } from '../tier-price-editor'
@@ -35,7 +34,7 @@ describe('TierPriceEditor stability', () => {
 
     // Parent component that uses inline onValidationChange (common pattern in model-mutate-drawer)
     function ParentWithInlineCallback() {
-      const [validationState, setValidationState] = React.useState<{
+      const [, setValidationState] = React.useState<{
         errors: string[]
       }>({ errors: [] })
 

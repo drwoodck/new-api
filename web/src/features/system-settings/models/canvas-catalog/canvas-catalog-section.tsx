@@ -17,45 +17,69 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useNavigate } from '@tanstack/react-router'
-import { Plus } from 'lucide-react'
+import { Download, Plus } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  exportExcel,
+  type ExcelCellValue,
+  type ExcelSheet,
+} from '@/lib/excel-export'
 
 import { SettingsSection } from '../../components/settings-section'
 import { CanvasCatalogFormDialog } from './components/canvas-catalog-form-dialog'
-import { CanvasCatalogOverviewTable } from './components/canvas-catalog-overview-table'
-import { useDeleteCanvasCatalogModel } from './hooks/use-canvas-catalog-mutations'
+import {
+  CanvasCatalogOverviewTable,
+  formatOverviewGroupPrice,
+  formatOverviewStatus,
+} from './components/canvas-catalog-overview-table'
 import { useCanvasCatalogOverview } from './hooks/use-canvas-catalog'
-import type {
-  CanvasCatalogOverviewGroupPrice,
-  CanvasCatalogOverviewRow,
-} from './types'
+import { useDeleteCanvasCatalogModel } from './hooks/use-canvas-catalog-mutations'
+import type { CanvasCatalogModelMeta, CanvasCatalogOverviewRow } from './types'
 
-// 编辑对话框「当前计费(自动文案)」预览行的拼装:单分组一行「分组名: 值」,
-// 值优先取分别定价的标量价,其次档表(档表 ×N),都没有才算未配置;
-// 多分组用「 · 」连接。文案与 overview 表的徽标口径一致,数据源都是
-// overview 行的 group_prices(编辑对话框内部经 GET :id 拿全量条目但不含该列)。
-function groupPriceValue(
-  gp: CanvasCatalogOverviewGroupPrice,
-  t: (key: string) => string
-): string {
-  if (gp.price != null) return String(gp.price)
-  const tierCount = gp.price_tiers?.length ?? 0
-  if (tierCount > 0) return `${t('档表')}×${tierCount}`
-  return t('未配置')
-}
-
+// 编辑对话框「当前计费(自动文案)」预览行:多分组用「 · 」连接。单分组文案
+// 直接复用 overview 表徽标那一份,数据源都是 overview 行的 group_prices
+// (编辑对话框内部经 GET :id 拿全量条目但不含该列)。
 function buildEffectivePriceSummary(
   row: CanvasCatalogOverviewRow,
   t: (key: string) => string
 ): string {
   return row.group_prices
-    .map((gp) => `${gp.group_name}: ${groupPriceValue(gp, t)}`)
+    .map((gp) => formatOverviewGroupPrice(gp, t))
     .join(' · ')
+}
+
+// 导出的就是屏幕上那张总览表(操作列除外):列顺序与文案都对齐
+// canvas-catalog-overview-table,免得导出一份对不上的数据。
+function buildOverviewExportSheet(
+  rows: CanvasCatalogOverviewRow[],
+  mode: 'configured' | 'unconfigured',
+  sheetName: string,
+  t: (key: string) => string
+): ExcelSheet {
+  return {
+    name: sheetName,
+    columns: [
+      { header: t('中转站模型名'), width: 32 },
+      { header: t('模型 ID'), width: 10 },
+      { header: t('画布显示名'), width: 24 },
+      { header: t('模型说明'), width: 60 },
+      { header: t('状态'), width: 20 },
+      { header: t('分组价格'), width: 48 },
+    ],
+    rows: rows.map((row): ExcelCellValue[] => [
+      row.model_name,
+      row.model_id > 0 ? row.model_id : '',
+      row.display_name,
+      row.description,
+      formatOverviewStatus(row, mode, t),
+      buildEffectivePriceSummary(row, t),
+    ]),
+  }
 }
 
 export function CanvasCatalogSection() {
@@ -71,6 +95,10 @@ export function CanvasCatalogSection() {
   )
   const [deleteTarget, setDeleteTarget] =
     useState<CanvasCatalogOverviewRow | null>(null)
+  // 受控页签:导出按钮导的是当前这一页,得知道看的是哪一页。
+  const [activeTab, setActiveTab] = useState<'configured' | 'unconfigured'>(
+    'configured'
+  )
 
   // Handle URL prefill parameter from model metadata page
   useEffect(() => {
@@ -147,6 +175,27 @@ export function CanvasCatalogSection() {
     })
   }
 
+  // 元信息页的显示名/说明,按模型名索引后交给编辑对话框 —— 新建条目时用它
+  // 预填「显示名称」并展示「说明」,数据源就是已经拉好的 overview 行。
+  const modelMetaByRemoteId = useMemo(() => {
+    const metaByName: Record<string, CanvasCatalogModelMeta> = {}
+    for (const row of overviewRows) {
+      metaByName[row.model_name] = {
+        display_name: row.meta_display_name,
+        description: row.description,
+      }
+    }
+    return metaByName
+  }, [overviewRows])
+
+  const handleExport = (mode: 'configured' | 'unconfigured') => {
+    const rows = mode === 'configured' ? configured : unconfigured
+    const sheetName = mode === 'configured' ? t('已配置完成') : t('未配置')
+    exportExcel(`${t('画布模型目录')}-${sheetName}`, [
+      buildOverviewExportSheet(rows, mode, sheetName, t),
+    ])
+  }
+
   // 编辑对话框的「当前计费(自动文案)」预览:从 overview 行拼一行摘要,
   // 不新拉接口。新建(无 editingId/prefillRemoteId)或该行没有分组价格时
   // 返回 undefined,对话框内不渲染预览块。
@@ -173,7 +222,13 @@ export function CanvasCatalogSection() {
 
   return (
     <SettingsSection title={t('画布模型目录')}>
-      <Tabs defaultValue='configured' className='space-y-3'>
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) =>
+          setActiveTab(value as 'configured' | 'unconfigured')
+        }
+        className='space-y-3'
+      >
         <div className='flex items-center justify-between'>
           <TabsList>
             <TabsTrigger value='configured'>
@@ -183,10 +238,20 @@ export function CanvasCatalogSection() {
               {t('未配置')} ({unconfigured.length})
             </TabsTrigger>
           </TabsList>
-          <Button size='sm' variant='outline' onClick={handleCreate}>
-            <Plus className='mr-1.5 h-4 w-4' />
-            {t('手动新增条目')}
-          </Button>
+          <div className='flex items-center gap-2'>
+            <Button
+              size='sm'
+              variant='outline'
+              onClick={() => handleExport(activeTab)}
+            >
+              <Download className='mr-1.5 h-4 w-4' />
+              {t('导出 Excel')}
+            </Button>
+            <Button size='sm' variant='outline' onClick={handleCreate}>
+              <Plus className='mr-1.5 h-4 w-4' />
+              {t('手动新增条目')}
+            </Button>
+          </div>
         </div>
 
         <TabsContent value='configured' className='space-y-3'>
@@ -228,6 +293,7 @@ export function CanvasCatalogSection() {
         editingId={editingId}
         prefillRemoteId={prefillRemoteId}
         effectivePriceSummary={effectivePriceSummary}
+        modelMetaByRemoteId={modelMetaByRemoteId}
       />
 
       <ConfirmDialog

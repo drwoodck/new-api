@@ -178,10 +178,17 @@ func DeleteCanvasCatalogModelAdmin(c *gin.Context) {
 // canvasCatalogOverviewRow 是目录总览视图的一行:一个中转站已启用模型,
 // 关联它(可能没有的)models 行与(可能没有的)canvas_catalog_model 行。
 type canvasCatalogOverviewRow struct {
-	ModelName           string                            `json:"model_name"`
-	ModelID             int                               `json:"model_id"`
-	CatalogID           int                               `json:"catalog_id"`
-	DisplayName         string                            `json:"display_name"`
+	ModelName string `json:"model_name"`
+	ModelID   int    `json:"model_id"`
+	CatalogID int    `json:"catalog_id"`
+	// DisplayName 是画布目录条目自己的显示名(目录侧可改);MetaDisplayName 是
+	// models 表里元信息页维护的显示名。两者刻意分开 —— 未配置的模型只有后者,
+	// 前端「配置画布参数」时用它预填表单,不让管理员重打一遍。
+	DisplayName     string `json:"display_name"`
+	MetaDisplayName string `json:"meta_display_name"`
+	// Description 是 models 表的说明(元信息页维护,目录侧只读),与
+	// GetCanvasCatalogModelAdmin 里回填的 m.Description 同源,直接取 models 行。
+	Description         string                            `json:"description"`
 	Contract            string                            `json:"contract"`
 	Capabilities        string                            `json:"capabilities"`
 	CatalogEnabled      bool                              `json:"catalog_enabled"`
@@ -302,6 +309,8 @@ func GetCanvasCatalogOverviewAdmin(c *gin.Context) {
 		if hasModel {
 			row.ModelID = mm.Id
 			row.ModelStatus = mm.Status
+			row.MetaDisplayName = mm.DisplayName
+			row.Description = mm.Description
 		}
 		if hasCatalog {
 			row.CatalogID = cr.Id

@@ -69,6 +69,11 @@ export type StaticDataTableColumn<TData = unknown> = {
   className?: string
   cellClassName?: string | ((row: TData, index: number) => string | undefined)
   cell?: (row: TData, index: number) => React.ReactNode
+  /**
+   * 让文本单元格换行完整显示,而不是截断成一行加省略号。用于说明/index
+   * 这类一截就看不出内容的长文本列;省略时保持原来的截断行为。
+   */
+  wrap?: boolean
 }
 
 export function StaticDataTable<TData = unknown>(
@@ -167,7 +172,8 @@ function StaticDataTableRow<TData>({
         <TableCell
           key={column.id}
           className={cn(
-            'max-w-full min-w-0 overflow-hidden',
+            'max-w-full min-w-0',
+            column.wrap ? 'whitespace-normal break-words' : 'overflow-hidden',
             getStaticCellClassName(column, row, index)
           )}
         >
@@ -184,6 +190,8 @@ function renderStaticCellContent<TData>(
   index: number
 ) {
   const content = column.cell?.(row, index)
+  if (column.wrap) return content
+
   const textContent = getPrimitiveTextContent(content)
 
   if (!textContent) return content

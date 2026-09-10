@@ -39,7 +39,13 @@ func setupCatalogOverviewTestDB(t *testing.T) *gin.Engine {
 	model.DB = db
 	require.NoError(t, db.AutoMigrate(
 		&model.Ability{}, &model.Model{}, &model.CanvasCatalogModel{}, &model.ModelGroupPrice{},
+		&model.Channel{},
 	))
+	// GetEnabledModels 是 abilities INNER JOIN channels,只统计 status=1 的渠道。
+	// 没有 channels 表时那句 SQL 整条报错、已启用模型集合恒为空,所有依赖
+	// abilities 的断言都会假性通过(或直接找不到行) —— 各用例里的
+	// ChannelId:1 指的就是这条。
+	require.NoError(t, db.Create(&model.Channel{Id: 1, Key: "test-key", Status: 1, Name: "test-channel"}).Error)
 
 	router := gin.New()
 	router.GET("/api/canvas/admin/catalog-overview", GetCanvasCatalogOverviewAdmin)
@@ -90,6 +96,45 @@ func TestCatalogOverviewSplitsIntoConfiguredAndUnconfigured(t *testing.T) {
 	assert.False(t, byName["unconfigured-model"].Ready)
 	assert.Empty(t, byName["unconfigured-model"].DisplayName)
 	assert.Zero(t, byName["unconfigured-model"].CatalogID)
+}
+
+// TestCatalogOverviewCarriesModelMetaDisplayNameAndDescription 锁住元信息页
+// 那两列在总览里的来源:display_name 来自 canvas_catalog_model 行(目录侧可改),
+// meta_display_name / description 来自 models 行(元信息页维护,目录侧只读)。
+// 未配置的模型只有后者 —— "配置画布参数"要靠它预填表单,少了就得重打一遍。
+func TestCatalogOverviewCarriesModelMetaDisplayNameAndDescription(t *testing.T) {
+	router := setupCatalogOverviewTestDB(t)
+
+	model.DB.Create(&model.Ability{Group: "default", Model: "configured-model", ChannelId: 1, Enabled: true})
+	model.DB.Create(&model.Ability{Group: "default", Model: "unconfigured-model", ChannelId: 1, Enabled: true})
+	require.NoError(t, (&model.Model{
+		ModelName: "configured-model", Status: 1,
+		DisplayName: "元信息显示名", Description: "元信息说明",
+	}).Insert())
+	require.NoError(t, (&model.Model{
+		ModelName: "unconfigured-model", Status: 1,
+		DisplayName: "未配置的显示名", Description: "未配置的说明",
+	}).Insert())
+	model.DB.Create(&model.CanvasCatalogModel{
+		RemoteID: "configured-model", DisplayName: "目录显示名", Capabilities: "video_gen",
+		Enabled: boolPtr(true), Contract: "relay_video_async_v1", RequiresVocab: 1,
+	})
+
+	rows := getOverview(t, router)
+	byName := make(map[string]canvasCatalogOverviewRow, len(rows))
+	for _, r := range rows {
+		byName[r.ModelName] = r
+	}
+
+	require.Contains(t, byName, "configured-model")
+	assert.Equal(t, "目录显示名", byName["configured-model"].DisplayName, "DisplayName 仍是目录条目自己的值")
+	assert.Equal(t, "元信息显示名", byName["configured-model"].MetaDisplayName)
+	assert.Equal(t, "元信息说明", byName["configured-model"].Description)
+
+	require.Contains(t, byName, "unconfigured-model")
+	assert.Empty(t, byName["unconfigured-model"].DisplayName, "没有目录条目就没有目录显示名")
+	assert.Equal(t, "未配置的显示名", byName["unconfigured-model"].MetaDisplayName)
+	assert.Equal(t, "未配置的说明", byName["unconfigured-model"].Description)
 }
 
 // TestCatalogOverviewIncludesCatalogRowsMissingFromAbilities 锁住"取并集,
