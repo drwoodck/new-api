@@ -274,6 +274,10 @@ func SetApiRouter(router *gin.Engine) {
 			canvasAdminRoute.GET("/model-mapping-warnings", controller.GetModelMappingInconsistenciesAdmin)
 			canvasAdminRoute.GET("/catalog-overview", controller.GetCanvasCatalogOverviewAdmin)
 			canvasAdminRoute.GET("/contract-stats", controller.GetCanvasContractStats)
+			// 模型元数据管理
+			canvasAdminRoute.GET("/model-metadata/list", controller.GetModelMetadataList)
+			canvasAdminRoute.GET("/model-metadata/detail", controller.GetModelMetadataDetail)
+			canvasAdminRoute.POST("/model-metadata/update", controller.UpdateModelMetadata)
 		}
 
 		onboardingRoute := apiRouter.Group("/onboarding")

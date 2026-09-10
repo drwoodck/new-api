@@ -45,6 +45,12 @@ var buildFS embed.FS
 //go:embed web/dist/index.html
 var indexPage []byte
 
+// 模型元数据管理页。刻意不放进 web/dist —— 那是前端构建产物,重新构建
+// 会把手工加进去的文件清掉。页面自身是静态 HTML,只调
+// /api/canvas/admin/model-metadata/ 下的三个接口。
+//go:embed web/admin/model_metadata.html
+var modelMetadataPage []byte
+
 func main() {
 	startTime := time.Now()
 	kitutil.SetLogging(common.SysLog, func(message string) {
@@ -196,8 +202,9 @@ func main() {
 
 	// 设置路由
 	router.SetRouter(server, router.WebAssets{
-		BuildFS:   buildFS,
-		IndexPage: indexPage,
+		BuildFS:           buildFS,
+		IndexPage:         indexPage,
+		ModelMetadataPage: modelMetadataPage,
 	})
 	var port = os.Getenv("PORT")
 	if port == "" {

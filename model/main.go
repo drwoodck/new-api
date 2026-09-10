@@ -347,6 +347,7 @@ func migrateDB() error {
 		&ClientContractReport{},
 		&ModelGroupPrice{},
 		&VolcAssetUserGroup{},
+		&ModelMetadata{},
 	)
 	if err != nil {
 		return err
@@ -760,7 +761,13 @@ func closeDB(db *gorm.DB) error {
 }
 
 func CloseDB() error {
-	if LOG_DB != DB {
+	// LOG_DB 非 nil 才算「日志库与主库是两个连接」。
+	//
+	// 不能只判 LOG_DB != DB:LOG_DB 是 InitLogDB 里才赋值的,只调了 InitDB
+	// 的调用方(独立工具、单测)手里 LOG_DB 仍是 nil,而 nil != DB 恒为真,
+	// 于是 closeDB(nil) 空指针 panic —— 且是在 defer 里 panic,吞掉真正的
+	// 返回值。加上非 nil 判断后,这类调用方退化成「只关主库」,语义正确。
+	if LOG_DB != nil && LOG_DB != DB {
 		err := closeDB(LOG_DB)
 		if err != nil {
 			return err

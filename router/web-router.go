@@ -17,6 +17,9 @@ import (
 type WebAssets struct {
 	BuildFS   embed.FS
 	IndexPage []byte
+	// ModelMetadataPage 是模型元数据管理页。它刻意不进 web/dist(构建产物),
+	// 由 SetRouter 挂成独立路由直接服务。
+	ModelMetadataPage []byte
 }
 
 func SetWebRouter(router *gin.Engine, assets WebAssets) {

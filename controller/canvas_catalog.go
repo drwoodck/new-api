@@ -211,7 +211,7 @@ func resolveCanvasGroupPrice(remoteID, group string, groupPrices map[string]mode
 // 分组名字符串本身。
 // groupPrices 是调用方按模型预载的分组价格行(本模型的 group → 行,nil 表示
 // 该模型没有预载到任何行)——目录下发循环零逐条点查。
-func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, group string, metaDescriptions map[string]string, metaDisplayNames map[string]string, groupPrices map[string]model.ModelGroupPrice) canvasCatalogWireModel {
+func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, group string, metaDescriptions map[string]string, metaDisplayNames map[string]string, metadataMap map[string]*model.ModelMetadata, groupPrices map[string]model.ModelGroupPrice) canvasCatalogWireModel {
 	w := canvasCatalogWireModel{
 		RemoteID:      m.RemoteID,
 		DisplayName:   m.DisplayName,
@@ -263,9 +263,16 @@ func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, g
 		// 存储格式一致,原样透传。
 		w.SchemaOverride = &m.SchemaOverride
 	}
-	if s := strings.TrimSpace(m.ParamSchema); s != "" && json.Valid([]byte(s)) {
-		// 作为 JSON 对象内联下发;非法 JSON 保持 null —— param_schema 仅供
-		// UI 渲染表单,不能因为它弄垮整份目录。
+	// 填充 param_schema: 优先从 model_metadata 表,回退到目录存量列
+	if meta, ok := metadataMap[m.RemoteID]; ok && meta.ParamSchema != nil {
+		// model_metadata 表的 param_schema 已是 JSON 字符串,直接解析为对象
+		if json.Valid([]byte(*meta.ParamSchema)) {
+			w.ParamSchema = json.RawMessage(*meta.ParamSchema)
+		} else {
+			common.SysLog(fmt.Sprintf("Failed to parse param_schema for %s: invalid JSON", m.RemoteID))
+		}
+	} else if s := strings.TrimSpace(m.ParamSchema); s != "" && json.Valid([]byte(s)) {
+		// 回退到目录存量列(兼容旧数据)
 		w.ParamSchema = json.RawMessage(s)
 	}
 	return w
@@ -334,6 +341,17 @@ func GetCanvasCatalog(c *gin.Context) {
 		metaDisplayNames = map[string]string{}
 	}
 
+	// 分组过滤后的可见 ID 列表（只查询该分组可见模型的元数据）
+	visibleRemoteIDs := filterVisibleRemoteIDs(remoteIDs, groupModels)
+
+	// 预载元数据
+	metadataMap, err := model.GetModelMetadataMap(visibleRemoteIDs)
+	if err != nil {
+		// Fail-open: 查询失败按空 map 处理，不影响目录下发
+		common.SysLog(fmt.Sprintf("GetModelMetadataMap failed: %v", err))
+		metadataMap = make(map[string]*model.ModelMetadata)
+	}
+
 	// 预载全部分组价格行(分别定价模式的逐分组价),目录下发循环零逐条点查 ——
 	// 与 metaDescriptions 同一 fail-open 约定:查询失败按空处理(SysError),
 	// 让下游自然回落「无行 = 分组不可用 / 未定价」,不让一次查询故障弄垮整份目录。
@@ -350,7 +368,7 @@ func GetCanvasCatalog(c *gin.Context) {
 
 	models := make([]canvasCatalogWireModel, 0, len(rows))
 	for i := range rows {
-		models = append(models, toWireModel(&rows[i], groupModels, effectiveGroup, metaDescriptions, metaDisplayNames, allGroupPrices[rows[i].RemoteID]))
+		models = append(models, toWireModel(&rows[i], groupModels, effectiveGroup, metaDescriptions, metaDisplayNames, metadataMap, allGroupPrices[rows[i].RemoteID]))
 	}
 
 	response := gin.H{
@@ -382,4 +400,19 @@ func GetCanvasCatalog(c *gin.Context) {
 
 	// 写入的就是参与 etag 计算的那份 body,保证协商缓存与响应内容严格一致
 	c.Data(http.StatusOK, "application/json; charset=utf-8", bodyBytes)
+}
+
+// filterVisibleRemoteIDs 返回该分组可见的 remote_id 子集
+// groupModels 为 nil 时表示无分组信息 → Fail-open，全部可见
+func filterVisibleRemoteIDs(allIDs []string, groupModels map[string]struct{}) []string {
+	if groupModels == nil {
+		return allIDs
+	}
+	visible := make([]string, 0, len(allIDs))
+	for _, id := range allIDs {
+		if _, ok := groupModels[id]; ok {
+			visible = append(visible, id)
+		}
+	}
+	return visible
 }
