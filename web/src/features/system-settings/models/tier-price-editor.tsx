@@ -38,18 +38,31 @@ import type {
   PriceTierUnit,
 } from '@/features/models/types'
 import {
+  TIER_KEY_PRESETS,
+  TIER_TYPE_HINT,
   fromTierRows,
+  normalizeTierKey,
   toTierRows,
   validateTierRows,
   type TierPriceRow,
 } from './tier-price-editor-core'
 
-const tierTypeOptions: Array<{ value: PriceTierType; hint: string }> = [
-  { value: 'resolution', hint: '按分辨率分档，键用小写：720p / 1080p / 4k' },
-  { value: 'image_size', hint: '按图像尺寸分档，键用大写：1K / 2K / 4K' },
-  { value: 'request', hint: '按请求分档，键为秒数（5s）或留空 = 任意请求固定价' },
-  { value: 'mode', hint: '按模式分档，键原样：frame / pro' },
+const tierTypeLabels: Array<{ value: PriceTierType; label: string }> = [
+  { value: 'resolution', label: '分辨率' },
+  { value: 'image_size', label: '图像尺寸' },
+  { value: 'request', label: '时长' },
+  { value: 'mode', label: '模式' },
 ]
+
+// 占位符必须与该维度的真实键形态一致。
+// 这里曾写成 '720P'（大写），而分辨率键归一化后是 '720p' —— 占位符在教用户
+// 填错的形式，本身就是大小写混乱的来源之一。
+const tierKeyPlaceholder: Record<PriceTierType, string> = {
+  resolution: '720p',
+  image_size: '2K',
+  request: '5s（留空 = 任意请求固定价）',
+  mode: 'frame',
+}
 
 export type TierValidationState = {
   errors: string[]
@@ -68,8 +81,17 @@ export interface TierPriceEditorProps {
 }
 
 /**
- * 档位表编辑器：每档一行（维度/键/计价单位/价格），整表维度一致。
- * 空表 = 未配置（onChange 收到 null），与后端空档表丢弃语义一致。
+ * 档位表编辑器。
+ *
+ * 维度与计价单位提到**表级**：后端 NormalizePriceTierList 本就要求整表一致，
+ * 行级选择只会让人构造出必然被拒的表。
+ *
+ * 档位键提供**预选速填**（点一下就填好）而不限制自由输入 —— 渠道私有值
+ * （768p、frame 等）仍需能手工填。「分辨率小写 / 尺寸大写」这种相反规则
+ * 直接内联显示，不靠记忆。
+ *
+ * 档位名自动跟随键：名是给人看的、键是给机器匹配的，默认相同就不会填反。
+ *
  * 提交前校验与后端对齐（validateTierRows）：键归一化（大小写 / "5"→"5s"）、
  * 同表维度/计价单位一致、价格范围、键去重；不完整行明确提示而非静默丢弃。
  */
@@ -83,23 +105,31 @@ export function TierPriceEditor({
   const { t } = useTranslation()
   const [rows, setRows] = useState<TierPriceRow[]>(() => toTierRows(value))
 
+  // 空表时没有行可承载维度，但仍要记住用户的选择，否则「新增档位」会退回默认维度。
+  const [emptyTierType, setEmptyTierType] =
+    useState<PriceTierType>('resolution')
+  const [emptyBillingUnit, setEmptyBillingUnit] =
+    useState<PriceTierUnit>('second')
+
   const validation = useMemo(() => validateTierRows(rows), [rows])
   const { errors, warnings } = validation
-  const activeTierType = rows[0]?.tier_type
-  const tierTypeHint = useMemo(
-    () =>
-      tierTypeOptions.find((option) => option.value === activeTierType)?.hint ||
-      '',
-    [activeTierType]
-  )
+
+  const activeTierType: PriceTierType = rows[0]?.tier_type ?? emptyTierType
+  const activeBillingUnit: PriceTierUnit =
+    rows[0]?.billing_unit ?? emptyBillingUnit
+  const presets = TIER_KEY_PRESETS[activeTierType]
 
   // 通知父组件校验状态（父组件根据 errors 决定是否禁用保存按钮）。
   // 不把 onValidationChange 放入依赖 —— 它是父组件传入的内联函数，每次渲染都是新引用，
   // 会触发无限循环：effect 调用 → setGroupPriceRows → 父组件重渲染 → 新引用 → effect 再次触发。
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  //
+  // 用块级 disable 而非 next-line：oxlint 把违规报在 hook 体内的使用处（onValidationChange?.(...)），
+  // 单行注释覆盖不到那里，会漏报成 error。
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     onValidationChange?.({ errors, warnings })
   }, [errors, warnings])
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   const commit = useCallback(
     (nextRows: TierPriceRow[]) => {
@@ -118,17 +148,55 @@ export function TierPriceEditor({
     [commit, rows]
   )
 
+  // 改键时让显示名跟着走。用户已自定义过名（既不等于旧键、也非空）时不覆盖。
+  const updateKey = useCallback(
+    (id: number, nextKey: string) => {
+      commit(
+        rows.map((row) => {
+          if (row.id !== id) return row
+          const labelFollows = row.label.trim() === '' || row.label === row.key
+          return {
+            ...row,
+            key: nextKey,
+            label: labelFollows ? nextKey : row.label,
+          }
+        })
+      )
+    },
+    [commit, rows]
+  )
+
+  const changeTierType = useCallback(
+    (next: PriceTierType) => {
+      setEmptyTierType(next)
+      if (rows.length > 0) {
+        commit(rows.map((row) => ({ ...row, tier_type: next })))
+      }
+    },
+    [commit, rows]
+  )
+
+  const changeBillingUnit = useCallback(
+    (next: PriceTierUnit) => {
+      setEmptyBillingUnit(next)
+      if (rows.length > 0) {
+        commit(rows.map((row) => ({ ...row, billing_unit: next })))
+      }
+    },
+    [commit, rows]
+  )
+
   const addRow = useCallback(() => {
     const base: TierPriceRow = {
       id: Date.now() + Math.random(),
       label: '',
-      tier_type: rows.length > 0 ? rows[0].tier_type : 'resolution',
+      tier_type: activeTierType,
       key: '',
-      billing_unit: rows.length > 0 ? rows[0].billing_unit : 'second',
+      billing_unit: activeBillingUnit,
       price: '',
     }
     commit([...rows, base])
-  }, [commit, rows])
+  }, [commit, rows, activeTierType, activeBillingUnit])
 
   const removeRow = useCallback(
     (id: number) => {
@@ -146,100 +214,136 @@ export function TierPriceEditor({
       {!compact && (
         <FieldDescription>
           {t(
-            '档位表按请求参数（分辨率/尺寸/时长/模式）选档计价，每档可独立选择按秒或按次；一张表内分档维度与计价单位必须一致，键按规范归一化（分辨率小写、尺寸大写、request 为秒数或留空=固定价）。'
+            '档位表按请求参数（分辨率 / 尺寸 / 时长 / 模式）选档计价；一张表一个分档维度、一种计价单位。'
           )}
         </FieldDescription>
       )}
 
-      <div className='space-y-2'>
-        {rows.length > 0 && (
-          <div className='grid grid-cols-[1.2fr_1.4fr_0.8fr_0.8fr_2rem] items-center gap-2 text-xs font-medium text-muted-foreground'>
-            <span>{t('档位名')}</span>
-            <span>{t('档位键')}</span>
-            <span>{t('维度')}</span>
-            <span>{t('计价')}</span>
-            <span />
-          </div>
-        )}
-
-        {rows.map((row) => (
-          <div key={row.id} className='space-y-1 rounded-md border p-2'>
-            <div className='grid grid-cols-[1.2fr_1.4fr_0.8fr_0.8fr_2rem] items-center gap-2'>
-              <Input
-                placeholder='720P'
-                value={row.label}
-                onChange={(event) =>
-                  updateRow(row.id, { label: event.target.value })
-                }
-              />
-              <Input
-                placeholder={
-                  row.tier_type === 'request' ? '5s / 留空=固定价' : '720p'
-                }
-                value={row.key}
-                onChange={(event) =>
-                  updateRow(row.id, { key: event.target.value })
-                }
-              />
-              <Select
-                value={row.tier_type}
-                onValueChange={(next) =>
-                  updateRow(row.id, { tier_type: next as PriceTierType })
-                }
-              >
-                <SelectTrigger size='sm'>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {tierTypeOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.value}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select
-                value={row.billing_unit}
-                onValueChange={(next) =>
-                  updateRow(row.id, { billing_unit: next as PriceTierUnit })
-                }
-              >
-                <SelectTrigger size='sm'>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value='second'>/秒</SelectItem>
-                  <SelectItem value='request'>/次</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                type='button'
-                variant='ghost'
-                size='icon'
-                aria-label={t('删除档位')}
-                onClick={() => removeRow(row.id)}
-              >
-                <Trash2 />
-              </Button>
-            </div>
-            <Input
-              type='text'
-              inputMode='decimal'
-              placeholder={row.billing_unit === 'second' ? '0.75' : '2.30'}
-              value={row.price}
-              onChange={(event) => {
-                const next = event.target.value
-                if (!/^(\d+(\.\d*)?|\.\d*)?$/.test(next)) return
-                updateRow(row.id, { price: next })
-              }}
-            />
-          </div>
-        ))}
+      {/* 表级设置：后端要求整表一致，所以选一次而不是每行选一次 */}
+      <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
+        <div className='flex items-center gap-2'>
+          <span className='text-muted-foreground text-xs'>{t('分档维度')}</span>
+          <Select
+            value={activeTierType}
+            onValueChange={(next) => changeTierType(next as PriceTierType)}
+          >
+            <SelectTrigger size='sm' className='w-32'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {tierTypeLabels.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {t(option.label)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className='flex items-center gap-2'>
+          <span className='text-muted-foreground text-xs'>{t('计价方式')}</span>
+          <Select
+            value={activeBillingUnit}
+            onValueChange={(next) => changeBillingUnit(next as PriceTierUnit)}
+          >
+            <SelectTrigger size='sm' className='w-24'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value='second'>{t('按秒')}</SelectItem>
+              <SelectItem value='request'>{t('按次')}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
-      {rows.length > 0 && tierTypeHint && (
-        <p className='text-muted-foreground text-xs'>{tierTypeHint}</p>
-      )}
+      {/* 规则内联显示 —— 两个维度的大小写规则相反，不该靠记忆区分 */}
+      <p className='text-muted-foreground text-xs'>
+        {t(TIER_TYPE_HINT[activeTierType])}
+      </p>
+
+      <div className='space-y-2'>
+        {rows.map((row) => {
+          const { key: normalizedKey, error: keyError } = normalizeTierKey(
+            activeTierType,
+            row.key
+          )
+          const pendingNormalize =
+            !keyError &&
+            normalizedKey !== '' &&
+            normalizedKey !== row.key.trim()
+
+          return (
+            <div key={row.id} className='space-y-2 rounded-md border p-2'>
+              <div className='grid grid-cols-[1fr_0.7fr_2rem] items-center gap-2'>
+                <Input
+                  placeholder={tierKeyPlaceholder[activeTierType]}
+                  value={row.key}
+                  onChange={(event) => updateKey(row.id, event.target.value)}
+                  className='font-mono'
+                />
+                <Input
+                  type='text'
+                  inputMode='decimal'
+                  placeholder={activeBillingUnit === 'second' ? '0.75' : '2.30'}
+                  value={row.price}
+                  onChange={(event) => {
+                    const next = event.target.value
+                    if (!/^(\d+(\.\d*)?|\.\d*)?$/.test(next)) return
+                    updateRow(row.id, { price: next })
+                  }}
+                />
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon'
+                  aria-label={t('删除档位')}
+                  onClick={() => removeRow(row.id)}
+                >
+                  <Trash2 />
+                </Button>
+              </div>
+
+              {/* 预选速填：点一下就填好，大小写由界面保证，不必记规则 */}
+              {presets.length > 0 && (
+                <div className='flex flex-wrap items-center gap-1'>
+                  {presets.map((preset) => (
+                    <button
+                      key={preset}
+                      type='button'
+                      onClick={() => updateKey(row.id, preset)}
+                      className='hover:bg-accent rounded border px-1.5 py-0.5 font-mono text-[11px]'
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className='flex flex-wrap items-center gap-2'>
+                <Input
+                  placeholder={t('显示名（默认与键相同）')}
+                  value={row.label}
+                  onChange={(event) =>
+                    updateRow(row.id, { label: event.target.value })
+                  }
+                  className='h-7 max-w-56 text-xs'
+                />
+                {pendingNormalize && (
+                  <span className='text-muted-foreground text-[11px]'>
+                    {t('将存为')}{' '}
+                    <span className='font-mono'>{normalizedKey}</span>
+                  </span>
+                )}
+                {keyError && (
+                  <span className='text-destructive text-[11px]'>
+                    {keyError}
+                  </span>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
 
       {errors.length > 0 && (
         <Alert variant='destructive'>

@@ -80,6 +80,32 @@ export const tierPriceSchema = z
     })
   })
 
+// TIER_KEY_PRESETS 是各维度的常用档位键，供界面上「点一下就填好」。
+//
+// 只是速填，**不限制自由输入** —— 渠道私有值（768p、frame 等）仍需能手工填，
+// 用死枚举框住反而会把它们挡在外面。
+//
+// 与 types/price_tier.go 的 TierInput 注释同一份口径：
+//   Resolution  "480p"/"720p"/"1080p"/"4k"/"768p"   小写
+//   ImageSize   "1K"/"2K"/"4K"                      大写
+export const TIER_KEY_PRESETS: Record<PriceTierType, string[]> = {
+  resolution: ['480p', '720p', '1080p', '4k', '768p'],
+  image_size: ['1K', '2K', '4K'],
+  request: [],
+  mode: [],
+}
+
+// TIER_TYPE_HINT 直接显示在维度选择器旁边。
+//
+// 存在的理由：分辨率键要小写、图像尺寸键要大写，两个维度规则相反 ——
+// 让人靠记忆区分必然出错。把规则印在界面上，用户不必记。
+export const TIER_TYPE_HINT: Record<PriceTierType, string> = {
+  resolution: '键用小写：480p / 720p / 1080p / 4k',
+  image_size: '键用大写：1K / 2K / 4K',
+  request: '键为秒数（如 5s）；留空 = 任意请求按该档固定价',
+  mode: '键原样填写，如 frame / pro',
+}
+
 // TierPriceRow 是编辑器内的草稿态：price 用字符串避免输入中途被强制转换，
 // id 提供稳定列表 key（避免按索引渲染导致的重挂载）。
 export type TierPriceRow = {
