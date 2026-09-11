@@ -258,6 +258,7 @@ func SetApiRouter(router *gin.Engine) {
 		canvasRoute.Use(middleware.TokenAuthReadOnly())
 		{
 			canvasRoute.GET("/catalog", controller.GetCanvasCatalog)
+			canvasRoute.GET("/usage", controller.GetCanvasUsage)
 			canvasRoute.POST("/device-bind", controller.BindCanvasDevice)
 			canvasRoute.POST("/client-contracts", controller.ReportClientContracts)
 			// 分组通知:拉取发给调用者分组的通知 + 幂等标记已读。挂在这组下的
