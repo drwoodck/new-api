@@ -51,10 +51,13 @@ export function useUpdateModelMetadata() {
     mutationFn: ({
       modelName,
       paramSchema,
+      mediaConfig,
     }: {
       modelName: string
       paramSchema: string
-    }) => updateModelMetadata(modelName, paramSchema),
+      /** 省略 = 不动这一列(后端是部分更新语义);传空串 = 清除配置回模板默认 */
+      mediaConfig?: string
+    }) => updateModelMetadata(modelName, paramSchema, mediaConfig),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['model-metadata-list'] })
       queryClient.invalidateQueries({ queryKey: ['model-metadata-detail'] })

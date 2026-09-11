@@ -25,6 +25,8 @@ import { api } from '@/lib/api'
 export interface ModelMetadataRow {
   model_name: string
   param_schema?: string
+  /** 参考素材形态(JSON 字符串)。空 = 沿用契约模板默认 */
+  media_config?: string
   endpoint_config?: string
   created_at: string
   updated_at: string
@@ -52,13 +54,21 @@ export async function getModelMetadata(
   return res.data
 }
 
+/**
+ * 保存模型元数据。
+ *
+ * `mediaConfig` **只在传入时**才进请求体 —— 后端是部分更新语义:不传的字段
+ * 保持原值。省略它表示「别动这一列」,传空串表示「清掉配置、回到模板默认」。
+ */
 export async function updateModelMetadata(
   modelName: string,
-  paramSchema: string
+  paramSchema: string,
+  mediaConfig?: string
 ): Promise<ApiResponse> {
   const res = await api.post('/api/canvas/admin/model-metadata/update', {
     model_name: modelName,
     param_schema: paramSchema,
+    ...(mediaConfig !== undefined ? { media_config: mediaConfig } : {}),
   })
   return res.data
 }

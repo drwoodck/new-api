@@ -13,8 +13,18 @@ import (
 // remote_id 去这张表里查 schema 的(见 controller.toWireModel),对不上就查不到,
 // 表现为「画布节点面板始终是模板默认参数」而没有任何报错。
 type ModelMetadata struct {
-	ModelName      string    `gorm:"primaryKey;type:varchar(255)" json:"model_name"`
-	ParamSchema    *string   `gorm:"type:text" json:"param_schema,omitempty"`
+	ModelName   string  `gorm:"primaryKey;type:varchar(255)" json:"model_name"`
+	ParamSchema *string `gorm:"type:text" json:"param_schema,omitempty"`
+	// MediaConfig 是模型的**参考素材形态**配置,形状对应画布 profile 的
+	// request_shape.media(如 {"wrap":"url_array","field":"images"})。
+	//
+	// 与 param_schema 同表同源:两者都是「这个模型对外长什么样」的一部分,
+	// 一起随目录下发。它决定画布把参考图/视频/音频**放进请求的哪个字段、
+	// 用什么形态** —— 各上游供应商这一格差异极大(数组 / 拼接串 / multipart /
+	// 按类型分桶),而 kungai 的 Sora 渠道是透传的,所以只能由这里配准。
+	//
+	// 空 = 用契约模板的默认形态(向后兼容,老数据不受影响)。
+	MediaConfig    *string   `gorm:"type:text" json:"media_config,omitempty"`
 	EndpointConfig *string   `gorm:"type:text" json:"endpoint_config,omitempty"`
 	CreatedAt      time.Time `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt      time.Time `gorm:"autoUpdateTime" json:"updated_at"`
@@ -63,7 +73,9 @@ func GetModelMetadata(modelName string) (*ModelMetadata, error) {
 func UpsertModelMetadata(metadata *ModelMetadata) error {
 	return DB.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "model_name"}},
-		DoUpdates: clause.AssignmentColumns([]string{"param_schema", "endpoint_config", "updated_at"}),
+		// 每加一个内容列都要在这里登记 —— 漏了它,首次插入有值、之后每次保存
+		// 都写不进去(OnConflict 只更新列出来的这些)。
+		DoUpdates: clause.AssignmentColumns([]string{"param_schema", "media_config", "endpoint_config", "updated_at"}),
 	}).Create(metadata).Error
 }
 

@@ -27,6 +27,8 @@ import { JsonCodeEditor } from '@/components/json-code-editor'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { FlatMediaEditor } from '../canvas-catalog/components/schema-override/flat-media-editor'
+import type { FlatMedia } from '../canvas-catalog/components/schema-override/types'
 
 import {
   matchesQuery,
@@ -55,6 +57,25 @@ function isValidJson(text: string): boolean {
     return true
   } catch {
     return false
+  }
+}
+
+/**
+ * 把后端存的媒体形态 JSON 解析成编辑器要的形状。
+ *
+ * 解不出就当未配置 —— 脏数据不该让整个编辑区打不开(旧版本写坏的、手工改库
+ * 的都可能有)。真要修,重新选一次形态即可覆盖。
+ */
+function parseMediaConfig(raw?: string): FlatMedia | null {
+  if (!raw || raw.trim() === '') return null
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed && typeof parsed === 'object' && 'wrap' in parsed) {
+      return parsed as FlatMedia
+    }
+    return null
+  } catch {
+    return null
   }
 }
 
@@ -110,10 +131,14 @@ export function ModelMetadataPanel() {
     editingName === '__new__' ? null : editingName
   )
 
+  // 参考素材形态。null = 未配置(沿用契约模板默认)。
+  const [draftMedia, setDraftMedia] = useState<FlatMedia | null>(null)
+
   // 详情到了再灌进草稿 —— 避免用上一次编辑的残值渲染
   useEffect(() => {
     if (detail && detail.model_name === editingName) {
       setDraftSchema(detail.param_schema ?? '')
+      setDraftMedia(parseMediaConfig(detail.media_config))
     }
   }, [detail, editingName])
 
@@ -123,18 +148,21 @@ export function ModelMetadataPanel() {
     setEditingName(modelName)
     setDraftName(modelName)
     setDraftSchema('')
+    setDraftMedia(null)
   }
 
   const startCreate = () => {
     setEditingName('__new__')
     setDraftName('')
     setDraftSchema('')
+    setDraftMedia(null)
   }
 
   const cancelEdit = () => {
     setEditingName(null)
     setDraftName('')
     setDraftSchema('')
+    setDraftMedia(null)
   }
 
   const save = async () => {
@@ -150,6 +178,9 @@ export function ModelMetadataPanel() {
       await updateMutation.mutateAsync({
         modelName: draftName.trim(),
         paramSchema: draftSchema,
+        // 编辑器显示什么就存什么:null 序列化成空串,表示「清掉配置、
+        // 回到契约模板默认形态」;后端按部分更新语义处理。
+        mediaConfig: draftMedia ? JSON.stringify(draftMedia) : '',
       })
       toast.success(t('已保存'))
       cancelEdit()
@@ -323,6 +354,18 @@ export function ModelMetadataPanel() {
               {t('JSON 格式错误，保存前必须修正')}
             </p>
           )}
+
+          {/* 参数表决定「有哪些参数可调」,这里决定「参考素材放进请求的哪个
+              字段、用什么形态」—— 各上游供应商这一格差异极大(数组 / 拼接串 /
+              multipart / 按类型分桶),而中转站是透传的,配错就传不上去。 */}
+          <div className='space-y-1 border-t pt-3'>
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                '参考素材形态：决定画布把参考图/视频/音频放进请求的哪个字段。留空则沿用契约模板的默认形态。'
+              )}
+            </p>
+            <FlatMediaEditor value={draftMedia} onChange={setDraftMedia} />
+          </div>
 
           <div className='flex gap-2'>
             <Button

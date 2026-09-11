@@ -40,6 +40,13 @@ type canvasCatalogWireModel struct {
 	ParamSchema    json.RawMessage `json:"param_schema"`
 	SchemaOverride *string         `json:"schema_override"`
 	RequiresVocab  int             `json:"requires_vocab"`
+	// MediaConfig 是参考素材形态(对应画布 profile 的 request_shape.media)。
+	// 决定画布把参考图/视频/音频放进请求的哪个字段、用什么形态 —— 各上游
+	// 供应商差异极大,而 Sora 渠道是透传的,只能靠这里配准。
+	//
+	// omitempty + 老客户端忽略未知字段:不下发时画布继续用契约模板的默认形态,
+	// 行为与本次改动前完全一致。
+	MediaConfig json.RawMessage `json:"media_config,omitempty"`
 
 	// GroupVisible 表示该条目是否在调用者分组的可用模型集里(派生自 abilities,
 	// 不是目录自己的列)。
@@ -274,6 +281,16 @@ func toWireModel(m *model.CanvasCatalogModel, groupModels map[string]struct{}, g
 	} else if s := strings.TrimSpace(m.ParamSchema); s != "" && json.Valid([]byte(s)) {
 		// 回退到目录存量列(兼容旧数据)
 		w.ParamSchema = json.RawMessage(s)
+	}
+	// 填充 media_config:只在 model_metadata 表里(目录表没有对应列,故无回退)。
+	// 与 param_schema 同一套校验:非法 JSON 记日志并当作没配 —— 宁可用契约
+	// 模板的默认形态,也不能把一份坏配置下发给画布。
+	if meta, ok := metadataMap[m.RemoteID]; ok && meta.MediaConfig != nil {
+		if json.Valid([]byte(*meta.MediaConfig)) {
+			w.MediaConfig = json.RawMessage(*meta.MediaConfig)
+		} else {
+			common.SysLog(fmt.Sprintf("Failed to parse media_config for %s: invalid JSON", m.RemoteID))
+		}
 	}
 	return w
 }
