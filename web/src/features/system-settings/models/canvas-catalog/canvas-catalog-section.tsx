@@ -32,6 +32,7 @@ import {
 } from '@/lib/excel-export'
 
 import { SettingsSection } from '../../components/settings-section'
+import { CanvasNoticesPanel } from '../canvas-notices/canvas-notices-panel'
 import { ModelMetadataPanel } from '../model-metadata/model-metadata-panel'
 import { getCanvasCatalogModel } from './api'
 import { CanvasCatalogFormDialog } from './components/canvas-catalog-form-dialog'
@@ -122,11 +123,11 @@ export function CanvasCatalogSection() {
   const [deleteTarget, setDeleteTarget] =
     useState<CanvasCatalogOverviewRow | null>(null)
   // 受控页签:导出按钮导的是当前这一页,得知道看的是哪一页。
+  // 'notices' 是单独一页(画布分组通知管理),与目录/参数表无关,导出与
+  // 新增条目按钮在那页要收起来。
   const [activeTab, setActiveTab] = useState<
-    'configured' | 'unconfigured' | 'metadata'
-  >(
-    'configured'
-  )
+    'configured' | 'unconfigured' | 'metadata' | 'notices'
+  >('configured')
 
   // Handle URL prefill parameter from model metadata page
   useEffect(() => {
@@ -298,7 +299,9 @@ export function CanvasCatalogSection() {
       <Tabs
         value={activeTab}
         onValueChange={(value) =>
-          setActiveTab(value as 'configured' | 'unconfigured' | 'metadata')
+          setActiveTab(
+            value as 'configured' | 'unconfigured' | 'metadata' | 'notices'
+          )
         }
         className='flex min-h-0 flex-1 flex-col space-y-3'
       >
@@ -315,8 +318,11 @@ export function CanvasCatalogSection() {
                 参数表决定选中后有哪些参数可调。放同一个分区里,配模型时
                 不必在两个菜单之间来回跳。 */}
             <TabsTrigger value='metadata'>{t('模型参数表')}</TabsTrigger>
+            {/* 分组通知跟目录/参数表都不是一回事:它不发模型,只给用户发消息。
+                放同一页是因为入口位置就这么定的 —— 配画布相关的东西集中在一处。 */}
+            <TabsTrigger value='notices'>{t('画布通知')}</TabsTrigger>
           </TabsList>
-          {activeTab !== 'metadata' && (
+          {(activeTab === 'configured' || activeTab === 'unconfigured') && (
             <div className='flex items-center gap-2'>
               <Button
                 size='sm'
@@ -399,6 +405,13 @@ export function CanvasCatalogSection() {
           className='min-h-0 flex-1 space-y-3 overflow-auto'
         >
           <ModelMetadataPanel />
+        </TabsContent>
+
+        <TabsContent
+          value='notices'
+          className='min-h-0 flex-1 space-y-3 overflow-auto'
+        >
+          <CanvasNoticesPanel />
         </TabsContent>
       </Tabs>
 

@@ -260,6 +260,11 @@ func SetApiRouter(router *gin.Engine) {
 			canvasRoute.GET("/catalog", controller.GetCanvasCatalog)
 			canvasRoute.POST("/device-bind", controller.BindCanvasDevice)
 			canvasRoute.POST("/client-contracts", controller.ReportClientContracts)
+			// 分组通知:拉取发给调用者分组的通知 + 幂等标记已读。挂在这组下的
+			// 理由与 device-bind 相同 —— 画布手上只有 sk- key,而
+			// TokenAuthReadOnly 已经算好了 userId 与有效分组,零成本可取。
+			canvasRoute.GET("/notices", controller.GetCanvasNotices)
+			canvasRoute.POST("/notices/:id/read", controller.MarkCanvasNoticeRead)
 		}
 
 		canvasAdminRoute := apiRouter.Group("/canvas/admin")
@@ -280,6 +285,10 @@ func SetApiRouter(router *gin.Engine) {
 			canvasAdminRoute.POST("/model-metadata/update", controller.UpdateModelMetadata)
 			// 档位表只读体检:用真实计费逻辑回答「这一档能不能被命中」
 			canvasAdminRoute.GET("/tier-diagnostics", controller.GetTierDiagnostics)
+			// 分组通知管理:列表(含已撤回)/ 新建或更新 / 撤回
+			canvasAdminRoute.GET("/notices", controller.GetCanvasNoticesAdmin)
+			canvasAdminRoute.POST("/notices", controller.SaveCanvasNoticeAdmin)
+			canvasAdminRoute.DELETE("/notices/:id", controller.DeleteCanvasNoticeAdmin)
 		}
 
 		onboardingRoute := apiRouter.Group("/onboarding")
