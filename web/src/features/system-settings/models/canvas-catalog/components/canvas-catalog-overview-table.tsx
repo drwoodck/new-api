@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { DollarSign, Pencil, Settings2, Trash2 } from 'lucide-react'
+import { DollarSign, Pencil, Power, PowerOff, Settings2, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { BadgeCell } from '@/components/data-table/core/badge-cell'
@@ -41,6 +41,11 @@ type CanvasCatalogOverviewTableProps = {
   onDelete: (row: CanvasCatalogOverviewRow) => void
   // 跳转到模型管理页的定价编辑入口(带 highlight 定位)。
   onGoPricing: (row: CanvasCatalogOverviewRow) => void
+  // 快捷切换目录上下架(与编辑对话框里的「启用」开关同一字段、同一语义)。
+  // 只对已配置的行有意义 —— 未配置的行没有目录条目可切。
+  onToggleEnabled?: (row: CanvasCatalogOverviewRow) => void
+  // 正在切换的行 catalog_id:pending 期间禁用该行按钮,避免连点打出两次翻转。
+  togglingId?: number | null
 }
 
 function formatGroupPrice(t: (key: string) => string, price: number | null) {
@@ -218,6 +223,28 @@ export function CanvasCatalogOverviewTable(
                 </Button>
               ) : (
                 <>
+                  {/* 快捷上下架:与编辑对话框里的「启用」开关同一字段。图标即动作
+                      —— 已上架显示「点击停用」的断电图标并着警示色,与同列删除按钮
+                      同一套「危险动作着 destructive」的视觉语言。 */}
+                  <Button
+                    variant='ghost'
+                    size='icon-sm'
+                    onClick={() => props.onToggleEnabled?.(r)}
+                    disabled={props.togglingId === r.catalog_id}
+                    aria-label={r.catalog_enabled ? t('停用') : t('启用')}
+                    title={
+                      r.catalog_enabled
+                        ? t('停用后画布仍保留该模型记录,但不可再发起新生成(软下线)')
+                        : t('重新上架该模型,画布下次同步后即可再次发起生成')
+                    }
+                    className={
+                      r.catalog_enabled
+                        ? 'text-destructive hover:text-destructive'
+                        : undefined
+                    }
+                  >
+                    {r.catalog_enabled ? <PowerOff /> : <Power />}
+                  </Button>
                   <Button
                     variant='ghost'
                     size='icon-sm'

@@ -17,10 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Pencil, Plus } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { GroupBadge } from '@/components/group-badge'
 import { JsonCodeEditor } from '@/components/json-code-editor'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -34,6 +35,8 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
+import { useCanvasCatalogOverview } from '../canvas-catalog/hooks/use-canvas-catalog'
+import type { CanvasCatalogOverviewRow } from '../canvas-catalog/types'
 import {
   useModelMetadataDetail,
   useModelMetadataList,
@@ -72,6 +75,19 @@ export function ModelMetadataPanel() {
   const { t } = useTranslation()
   const { data: rows = [], isLoading } = useModelMetadataList()
   const updateMutation = useUpdateModelMetadata()
+
+  // 显示名 / 模型说明 / 启用分组三列的数据源:与「已配置完成」页同一份
+  // catalog-overview 响应(那里也读这几个字段),两页对同一模型显示的值
+  // 必然一致 —— 后端已把 enable_groups 排好序。
+  //
+  // 只配了参数表、目录里还没有的模型在 overview 里查不到,三列落 --:
+  // 那是"目录还没配"不是"数据丢了",用空值表达即可,不要在这里造默认值。
+  const { data: overviewRows = [] } = useCanvasCatalogOverview()
+  const overviewByModelName = useMemo(() => {
+    const byName = new Map<string, CanvasCatalogOverviewRow>()
+    for (const row of overviewRows) byName.set(row.model_name, row)
+    return byName
+  }, [overviewRows])
 
   const [editingName, setEditingName] = useState<string | null>(null)
   const [draftName, setDraftName] = useState('')
@@ -150,6 +166,9 @@ export function ModelMetadataPanel() {
         <TableHeader>
           <TableRow>
             <TableHead>{t('模型名')}</TableHead>
+            <TableHead>{t('画布显示名')}</TableHead>
+            <TableHead>{t('模型说明')}</TableHead>
+            <TableHead>{t('Enable Groups')}</TableHead>
             <TableHead>{t('状态')}</TableHead>
             <TableHead>{t('更新时间')}</TableHead>
             <TableHead />
@@ -159,10 +178,32 @@ export function ModelMetadataPanel() {
           {rows.map((row) => {
             const configured =
               !!row.param_schema && row.param_schema.trim() !== ''
+            const overview = overviewByModelName.get(row.model_name)
             return (
               <TableRow key={row.model_name}>
                 <TableCell className='font-mono text-xs'>
                   {row.model_name}
+                </TableCell>
+                <TableCell className='font-medium'>
+                  {overview?.display_name || '--'}
+                </TableCell>
+                <TableCell className='text-muted-foreground text-xs'>
+                  {overview?.description || '--'}
+                </TableCell>
+                <TableCell>
+                  {!overview || overview.enable_groups.length === 0 ? (
+                    <span className='text-muted-foreground text-xs'>--</span>
+                  ) : (
+                    <div className='flex flex-wrap items-start gap-1'>
+                      {overview.enable_groups.map((groupName) => (
+                        <GroupBadge
+                          key={groupName}
+                          group={groupName}
+                          size='sm'
+                        />
+                      ))}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell>
                   <Badge variant={configured ? 'default' : 'secondary'}>

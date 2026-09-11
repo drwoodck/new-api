@@ -20,6 +20,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { Download, Plus } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
@@ -32,6 +33,7 @@ import {
 
 import { SettingsSection } from '../../components/settings-section'
 import { ModelMetadataPanel } from '../model-metadata/model-metadata-panel'
+import { getCanvasCatalogModel } from './api'
 import { CanvasCatalogFormDialog } from './components/canvas-catalog-form-dialog'
 import {
   CanvasCatalogOverviewTable,
@@ -39,7 +41,10 @@ import {
   formatOverviewStatus,
 } from './components/canvas-catalog-overview-table'
 import { useCanvasCatalogOverview } from './hooks/use-canvas-catalog'
-import { useDeleteCanvasCatalogModel } from './hooks/use-canvas-catalog-mutations'
+import {
+  useDeleteCanvasCatalogModel,
+  useUpdateCanvasCatalogModel,
+} from './hooks/use-canvas-catalog-mutations'
 import type { CanvasCatalogModelMeta, CanvasCatalogOverviewRow } from './types'
 
 // 编辑对话框「当前计费(自动文案)」预览行:多分组用「 · 」连接。单分组文案
@@ -90,9 +95,12 @@ export function CanvasCatalogSection() {
   const navigate = useNavigate()
   const { data: overviewRows = [], isLoading } = useCanvasCatalogOverview()
   const deleteModel = useDeleteCanvasCatalogModel()
+  const updateModel = useUpdateCanvasCatalogModel()
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
+  // 正在快捷切换上下架的行:同一时刻只允许一行在途,按钮 pending 期间禁用
+  const [togglingId, setTogglingId] = useState<number | null>(null)
   const [prefillRemoteId, setPrefillRemoteId] = useState<string | undefined>(
     undefined
   )
@@ -169,6 +177,28 @@ export function CanvasCatalogSection() {
     if (!deleteTarget) return
     await deleteModel.mutateAsync(deleteTarget.catalog_id)
     setDeleteTarget(null)
+  }
+
+  // 快捷上下架(与编辑对话框里的「启用」开关同一字段)。
+  //
+  // **必须**先用 GET :id 取回全量条目再整体 PUT:overview 行不含
+  // description/pricing 等列,拿它拼请求体会把库里那些文字覆盖成空 ——
+  // 与 handleEdit 同一条约束(2026-09-04 修过一次的数据丢失 bug)。
+  const handleToggleEnabled = async (row: CanvasCatalogOverviewRow) => {
+    setTogglingId(row.catalog_id)
+    try {
+      const res = await getCanvasCatalogModel(row.catalog_id)
+      const full = res.data
+      if (!full) {
+        toast.error(t('未取到该目录条目，请刷新后重试'))
+        return
+      }
+      await updateModel.mutateAsync({ ...full, enabled: !full.enabled })
+    } catch {
+      // 失败提示由 useUpdateCanvasCatalogModel 的 onError 统一给出
+    } finally {
+      setTogglingId(null)
+    }
   }
 
   // 「去定价」→ 模型管理页 metadata 分区,highlight=该模型名自动打开编辑抽屉。
@@ -277,6 +307,8 @@ export function CanvasCatalogSection() {
             onEdit={handleEdit}
             onDelete={(row) => setDeleteTarget(row)}
             onGoPricing={handleGoPricing}
+            onToggleEnabled={handleToggleEnabled}
+            togglingId={togglingId}
           />
         </TabsContent>
 
