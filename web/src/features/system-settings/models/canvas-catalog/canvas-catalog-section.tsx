@@ -287,15 +287,23 @@ export function CanvasCatalogSection() {
   }
 
   return (
-    <SettingsSection title={t('画布模型目录')}>
+    // h-full min-h-0 是这一页能滚起来的前提:models 页的内容区是
+    // `flex-1 min-h-0` 但**不是 flex 容器**,子元素高度由内容决定 ——
+    // 不给这一层确定高度,下面的 flex-1/overflow-y-auto 全落空,内容
+    // 会被外层 overflow-hidden 直接裁掉(表现为「显示不全且不能滚」)。
+    <SettingsSection
+      title={t('画布模型目录')}
+      className='h-full min-h-0'
+    >
       <Tabs
         value={activeTab}
         onValueChange={(value) =>
           setActiveTab(value as 'configured' | 'unconfigured' | 'metadata')
         }
-        className='space-y-3'
+        className='flex min-h-0 flex-1 flex-col space-y-3'
       >
-        <div className='flex items-center justify-between'>
+        {/* 标签栏固定在顶部,不随内容滚 */}
+        <div className='flex shrink-0 items-center justify-between'>
           <TabsList>
             <TabsTrigger value='configured'>
               {t('已配置完成')} ({configured.length})
@@ -326,7 +334,10 @@ export function CanvasCatalogSection() {
           )}
         </div>
 
-        <TabsContent value='configured' className='space-y-3'>
+        <TabsContent
+          value='configured'
+          className='min-h-0 flex-1 space-y-3 overflow-auto'
+        >
           <p className='text-muted-foreground text-sm'>
             {t('画布客户端通过 /api/canvas/catalog 拉取以下条目。')}
           </p>
@@ -353,7 +364,10 @@ export function CanvasCatalogSection() {
           />
         </TabsContent>
 
-        <TabsContent value='unconfigured' className='space-y-3'>
+        <TabsContent
+          value='unconfigured'
+          className='min-h-0 flex-1 space-y-3 overflow-auto'
+        >
           <p className='text-muted-foreground text-sm'>
             {t(
               '这些模型已在中转站启用,但还没有画布目录配置(缺显示名或契约,画布同步时会跳过)。'
@@ -380,7 +394,10 @@ export function CanvasCatalogSection() {
           />
         </TabsContent>
 
-        <TabsContent value='metadata' className='space-y-3'>
+        <TabsContent
+          value='metadata'
+          className='min-h-0 flex-1 space-y-3 overflow-auto'
+        >
           <ModelMetadataPanel />
         </TabsContent>
       </Tabs>

@@ -21,19 +21,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { StaticDataTable } from '@/components/data-table/static/static-data-table'
 import { GroupBadge } from '@/components/group-badge'
 import { JsonCodeEditor } from '@/components/json-code-editor'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 
 import {
   matchesQuery,
@@ -190,75 +183,117 @@ export function ModelMetadataPanel() {
       )
     }
     return (
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>{t('模型名')}</TableHead>
-            <TableHead>{t('画布显示名')}</TableHead>
-            <TableHead>{t('模型说明')}</TableHead>
-            <TableHead>{t('Enable Groups')}</TableHead>
-            <TableHead>{t('状态')}</TableHead>
-            <TableHead>{t('更新时间')}</TableHead>
-            <TableHead />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {visibleRows.map((row) => {
-            const configured =
-              !!row.param_schema && row.param_schema.trim() !== ''
-            const overview = overviewByModelName.get(row.model_name)
-            return (
-              <TableRow key={row.model_name}>
-                <TableCell className='font-mono text-xs'>
-                  {row.model_name}
-                </TableCell>
-                <TableCell className='font-medium'>
-                  {overview?.display_name || '--'}
-                </TableCell>
-                <TableCell className='text-muted-foreground text-xs'>
-                  {overview?.description || '--'}
-                </TableCell>
-                <TableCell>
-                  {!overview || overview.enable_groups.length === 0 ? (
-                    <span className='text-muted-foreground text-xs'>--</span>
-                  ) : (
-                    <div className='flex flex-wrap items-start gap-1'>
-                      {overview.enable_groups.map((groupName) => (
-                        <GroupBadge
-                          key={groupName}
-                          group={groupName}
-                          size='sm'
-                        />
-                      ))}
-                    </div>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <Badge variant={configured ? 'default' : 'secondary'}>
-                    {configured ? t('已配置') : t('未配置')}
-                  </Badge>
-                </TableCell>
-                <TableCell className='text-muted-foreground text-xs'>
-                  {row.updated_at
-                    ? new Date(row.updated_at).toLocaleString()
-                    : '-'}
-                </TableCell>
-                <TableCell>
-                  <Button
-                    type='button'
-                    variant='ghost'
-                    size='sm'
-                    onClick={() => startEdit(row.model_name)}
-                  >
-                    <Pencil data-icon='inline-start' />
-                    {t('编辑')}
-                  </Button>
-                </TableCell>
-              </TableRow>
-            )
-          })}
-        </TableBody>
-      </Table>
+      // 换用 StaticDataTable(原来是原生 Table):三张表共用同一套列宽拖动
+      // 能力,列内容一字未改,只是从 JSX 子节点搬进 cell 回调。
+      <StaticDataTable
+        data={visibleRows}
+        getRowKey={(row) => row.model_name}
+        resizable
+        className='overflow-x-auto'
+        columns={[
+          {
+            id: 'model_name',
+            header: t('模型名'),
+            cellClassName: 'font-mono text-xs',
+            defaultWidth: 240,
+            cell: (row) => row.model_name,
+          },
+          {
+            // 与元信息页的「模型 ID」同源:overview 行的 model_id,
+            // 0 表示该模型还没有对应的 models 表行
+            id: 'model_id',
+            header: t('模型 ID'),
+            cellClassName: 'text-muted-foreground font-mono text-xs',
+            defaultWidth: 90,
+            cell: (row) => {
+              const overview = overviewByModelName.get(row.model_name)
+              return overview && overview.model_id > 0
+                ? overview.model_id
+                : '--'
+            },
+          },
+          {
+            id: 'display_name',
+            header: t('画布显示名'),
+            cellClassName: 'font-medium',
+            defaultWidth: 180,
+            cell: (row) =>
+              overviewByModelName.get(row.model_name)?.display_name || '--',
+          },
+          {
+            id: 'description',
+            header: t('模型说明'),
+            cellClassName: 'text-muted-foreground text-xs',
+            wrap: true,
+            defaultWidth: 320,
+            cell: (row) =>
+              overviewByModelName.get(row.model_name)?.description || '--',
+          },
+          {
+            id: 'enable_groups',
+            header: t('Enable Groups'),
+            defaultWidth: 180,
+            cell: (row) => {
+              const groups =
+                overviewByModelName.get(row.model_name)?.enable_groups ?? []
+              if (groups.length === 0) {
+                return <span className='text-muted-foreground text-xs'>--</span>
+              }
+              return (
+                <div className='flex flex-wrap items-start gap-1'>
+                  {groups.map((groupName) => (
+                    <GroupBadge key={groupName} group={groupName} size='sm' />
+                  ))}
+                </div>
+              )
+            },
+          },
+          {
+            id: 'status',
+            header: t('状态'),
+            defaultWidth: 110,
+            cell: (row) => (
+              <Badge
+                variant={
+                  row.param_schema && row.param_schema.trim() !== ''
+                    ? 'default'
+                    : 'secondary'
+                }
+              >
+                {row.param_schema && row.param_schema.trim() !== ''
+                  ? t('已配置')
+                  : t('未配置')}
+              </Badge>
+            ),
+          },
+          {
+            id: 'updated_at',
+            header: t('更新时间'),
+            cellClassName: 'text-muted-foreground text-xs',
+            defaultWidth: 180,
+            cell: (row) =>
+              row.updated_at
+                ? new Date(row.updated_at).toLocaleString()
+                : '-',
+          },
+          {
+            id: 'actions',
+            header: t(''),
+            defaultWidth: 100,
+            cell: (row) => (
+              <Button
+                type='button'
+                variant='ghost'
+                size='sm'
+                onClick={() => startEdit(row.model_name)}
+              >
+                <Pencil data-icon='inline-start' />
+                {t('编辑')}
+              </Button>
+            ),
+          },
+        ]}
+      />
     )
   }
 

@@ -99,18 +99,24 @@ export function CanvasCatalogOverviewTable(
       getRowKey={(r) => r.model_name}
       emptyClassName='text-sm'
       emptyContent={props.emptyContent}
+      // 表头可拖动改列宽;容器从默认的 overflow-hidden 换成 overflow-x-auto ——
+      // 否则列拖宽只会被裁掉,看不出任何变化。
+      resizable
+      className='overflow-x-auto'
       columns={[
         {
           id: 'model_name',
           header: t('中转站模型名'),
           cellClassName: 'font-mono text-xs',
           wrap: true,
+          defaultWidth: 260,
           cell: (r) => r.model_name,
         },
         {
           id: 'model_id',
           header: t('模型 ID'),
           cellClassName: 'text-muted-foreground text-xs',
+          defaultWidth: 90,
           cell: (r) => (r.model_id > 0 ? r.model_id : t('未建模型行')),
         },
         {
@@ -118,6 +124,7 @@ export function CanvasCatalogOverviewTable(
           header: t('画布显示名'),
           cellClassName: 'font-medium',
           wrap: true,
+          defaultWidth: 180,
           cell: (r) => r.display_name || '--',
         },
         {
@@ -126,6 +133,7 @@ export function CanvasCatalogOverviewTable(
           header: t('模型说明'),
           cellClassName: 'text-muted-foreground text-xs',
           wrap: true,
+          defaultWidth: 320,
           cell: (r) =>
             r.description || (
               <span className='text-muted-foreground text-xs'>--</span>
@@ -134,6 +142,7 @@ export function CanvasCatalogOverviewTable(
         {
           id: 'status',
           header: t('状态'),
+          defaultWidth: 150,
           cell: (r) => (
             <BadgeCell className='flex-wrap'>
               <StatusBadge
@@ -159,6 +168,7 @@ export function CanvasCatalogOverviewTable(
           // 复用元信息页那一列的 key,两页在每种语言下措辞必然相同。
           header: t('Enable Groups'),
           wrap: true,
+          defaultWidth: 180,
           cell: (r) =>
             r.enable_groups.length === 0 ? (
               <span className='text-muted-foreground text-xs'>--</span>
