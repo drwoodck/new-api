@@ -278,6 +278,8 @@ func SetApiRouter(router *gin.Engine) {
 			canvasAdminRoute.GET("/model-metadata/list", controller.GetModelMetadataList)
 			canvasAdminRoute.GET("/model-metadata/detail", controller.GetModelMetadataDetail)
 			canvasAdminRoute.POST("/model-metadata/update", controller.UpdateModelMetadata)
+			// 档位表只读体检:用真实计费逻辑回答「这一档能不能被命中」
+			canvasAdminRoute.GET("/tier-diagnostics", controller.GetTierDiagnostics)
 		}
 
 		onboardingRoute := apiRouter.Group("/onboarding")

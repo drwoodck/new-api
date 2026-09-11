@@ -31,16 +31,34 @@ func BuildTaskTierInput(c *gin.Context, info *RelayInfo) hosttypes.TierInput {
 	if err != nil {
 		return hosttypes.TierInput{}
 	}
+	return BuildTierInputFromRequest(info.ChannelType, req, ResolveTaskVideoDuration(c, info.ChannelType))
+}
+
+// BuildTierInputFromRequest 是不依赖 gin context 的纯函数版本。
+//
+// 抽出来是为了让档位诊断(controller 侧)复用**完全相同**的渠道取值逻辑 ——
+// 诊断必须和计费走同一条路径,否则"诊断说能命中、计费说不能"比没有诊断更糟。
+// 除时长改为入参外,与 BuildTaskTierInput 逐行等价。
+func BuildTierInputFromRequest(channelType int, req TaskSubmitReq, durationSeconds int) hosttypes.TierInput {
 	input := hosttypes.TierInput{
-		DurationSeconds: ResolveTaskVideoDuration(c, info.ChannelType),
+		DurationSeconds: durationSeconds,
 		Mode:            strings.ToLower(strings.TrimSpace(req.Mode)),
 	}
 
 	var resolution string
-	switch info.ChannelType {
+	switch channelType {
 	case constant.ChannelTypeSora, constant.ChannelTypeOpenAI:
-		// Sora 系用 req.Size（"720x1280"，缺省 720x1280），按短边换算档位。
-		resolution = resolutionFromDimensionString(req.Size)
+		// 优先用请求显式携带的 resolution（画布就是这么发的），认不出再退回
+		// 按 req.Size（"720x1280"）短边换算。
+		//
+		// 只认以 "p" 结尾的值：图片模型用的是同一个字段名，但发的是尺寸档
+		// （"1K"/"2K"/"4K"），那属于 image_size 维度。以 "p" 结尾这个判据把
+		// 两者干净分开，不会把图片的 4K 误当成视频分辨率。
+		if r := resolutionFromDimensionString(req.Resolution); strings.HasSuffix(r, "p") {
+			resolution = r
+		} else {
+			resolution = resolutionFromDimensionString(req.Size)
+		}
 	case constant.ChannelTypeDoubaoVideo, constant.ChannelTypeVolcEngine:
 		// 豆包系（Seedance）请求侧分辨率在 metadata["resolution"]（"1080p"）。
 		resolution = metadataResolution(req.Metadata)
@@ -66,7 +84,7 @@ func BuildTaskTierInput(c *gin.Context, info *RelayInfo) hosttypes.TierInput {
 		}
 	}
 	if resolution == "" {
-		resolution = defaultTierResolutionByChannel[info.ChannelType]
+		resolution = defaultTierResolutionByChannel[channelType]
 	}
 	input.Resolution = resolutionFromDimensionString(resolution)
 	// 图像尺寸档（image_size tier）：来自 metadata["image_size"]，大写化与

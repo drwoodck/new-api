@@ -876,6 +876,13 @@ type TaskSubmitReq struct {
 	Seconds        string                 `json:"seconds,omitempty"`
 	InputReference string                 `json:"input_reference,omitempty"`
 	Metadata       map[string]interface{} `json:"metadata,omitempty"`
+	// Resolution 是请求体顶层的分辨率字段（"480p"/"720p"）。
+	//
+	// 画布一直就是这么发的，但本结构体此前没有这个字段，encoding/json 会把它
+	// 静默丢弃 —— 后果是档位表里按分辨率分的档全部命中不了，所有请求都落到
+	// 渠道默认的 720p 上计费（480p 档配了也用不上，1080p/4k 则少收）。
+	// 显式接收它才能让分辨率真正参与选档。
+	Resolution string `json:"resolution,omitempty"`
 }
 
 func (t *TaskSubmitReq) GetPrompt() string {
