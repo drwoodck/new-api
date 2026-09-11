@@ -87,10 +87,33 @@ func BuildTierInputFromRequest(channelType int, req TaskSubmitReq, durationSecon
 		resolution = defaultTierResolutionByChannel[channelType]
 	}
 	input.Resolution = resolutionFromDimensionString(resolution)
-	// 图像尺寸档（image_size tier）：来自 metadata["image_size"]，大写化与
+	// 图像尺寸档（image_size tier）：值来自 metadata["image_size"]，大写化与
 	// NormalizeTierKey 一致。视频渠道一般不携带，留空即"该维度无输入"。
-	input.ImageSize = normalizeImageSizeKey(metadataImageSize(req.Metadata))
+	//
+	// 画布对图片模型把尺寸放在**名为 resolution 的字段**里发过来（值形如
+	// "1K"/"2K"/"4K"，而不是视频的 "480p"）。该字段此前根本没被解析，这一维度
+	// 因此恒为空、image_size 档表整张失效。按值的形态把它认出来归位 ——
+	// 与分辨率值（以 p 结尾）互斥，不会互相误判。
+	if looksLikeImageSizeKey(req.Resolution) {
+		input.ImageSize = normalizeImageSizeKey(req.Resolution)
+	} else {
+		input.ImageSize = normalizeImageSizeKey(metadataImageSize(req.Metadata))
+	}
 	return input
+}
+
+// looksLikeImageSizeKey 判断值是否为图像尺寸档形态（"1K"/"2K"/"4K"）。
+//
+// 判据是「纯数字 + K/k」。视频分辨率值一律以 "p" 结尾（"480p"/"720p"）或为
+// "4k"（小写，且 4 是数字但 "k" 前只有一位 —— 与 "1K"/"2K"/"4K" 形态相同）。
+// 这里只按「数字+K」这一形态判定，正是为了让它与分辨率值互斥。
+func looksLikeImageSizeKey(raw string) bool {
+	s := strings.TrimSpace(raw)
+	if len(s) < 2 || !strings.EqualFold(s[len(s)-1:], "k") {
+		return false
+	}
+	_, err := strconv.Atoi(s[:len(s)-1])
+	return err == nil
 }
 
 // metadataImageSize 读取请求 metadata["image_size"] 字符串值。

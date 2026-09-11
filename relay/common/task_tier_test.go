@@ -102,6 +102,44 @@ func TestBuildTaskTierInputIgnoresImageSizeInResolutionField(t *testing.T) {
 	assert.Equal(t, "720p", input.Resolution, "认不出时退回渠道默认,而不是猜一个")
 }
 
+// 图片模型:画布把尺寸放在名为 resolution 的字段里发("1K"/"2K"/"4K"),
+// 而该维度在 relay 侧叫 image_size,原本只从 metadata["image_size"] 取 ——
+// 两边字段名对不上,导致图片的尺寸档表整张失效。按值的形态归位。
+
+func TestBuildTaskTierInputRoutesKFormToImageSize(t *testing.T) {
+	info := &RelayInfo{ChannelMeta: &ChannelMeta{ChannelType: constant.ChannelTypeOpenAI}}
+	input := BuildTaskTierInput(taskCtxWithRequest(t, TaskSubmitReq{Resolution: "2K"}), info)
+
+	assert.Equal(t, "2K", input.ImageSize, "K 形值应归到 image_size 维度")
+	assert.Equal(t, "720p", input.Resolution, "同时不得污染分辨率维度")
+}
+
+func TestBuildTaskTierInputDoesNotRoutePFormToImageSize(t *testing.T) {
+	info := &RelayInfo{ChannelMeta: &ChannelMeta{ChannelType: constant.ChannelTypeOpenAI}}
+	input := BuildTaskTierInput(taskCtxWithRequest(t, TaskSubmitReq{Resolution: "480p"}), info)
+
+	assert.Empty(t, input.ImageSize, "以 p 结尾的是分辨率,不能进 image_size 维度")
+	assert.Equal(t, "480p", input.Resolution)
+}
+
+func TestLooksLikeImageSizeKey(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"1K", true}, {"2K", true}, {"4K", true}, {"2k", true}, {" 2k ", true},
+		{"480p", false}, {"720p", false}, {"1080p", false},
+		{"K", false}, {"", false}, {"junk", false}, {"2048x2048", false},
+		// 已知歧义:视频若真发 "4k" 会与图片的 "4K" 同形被归到 image_size。
+		// 当前业务约定视频只用 480p/720p,故不构成实际问题;若将来视频启用
+		// 4K,这里需要改成按模型能力显式区分,不能再靠形态猜。
+		{"4k", true},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.want, looksLikeImageSizeKey(c.in), "input %q", c.in)
+	}
+}
+
 func TestBuildTaskTierInputDoubaoFromMetadata(t *testing.T) {
 	info := &RelayInfo{ChannelMeta: &ChannelMeta{ChannelType: constant.ChannelTypeDoubaoVideo}}
 	input := BuildTaskTierInput(taskCtxWithRequest(t, TaskSubmitReq{
