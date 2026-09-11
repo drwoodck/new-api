@@ -26,6 +26,7 @@ import { ClaudeSettingsCard } from './claude-settings-card'
 import { GeminiSettingsCard } from './gemini-settings-card'
 import { GlobalSettingsCard } from './global-settings-card'
 import { GrokSettingsCard } from './grok-settings-card'
+import { ModelMetadataSection } from './model-metadata/model-metadata-section'
 import { RoutingReliabilitySection } from './routing-reliability-section'
 
 function formatJsonForEditor(value: string, fallback: string) {
@@ -198,6 +199,11 @@ const MODELS_SECTIONS = [
     id: 'canvas-catalog',
     titleKey: '画布模型目录',
     build: () => <CanvasCatalogSection />,
+  },
+  {
+    id: 'model-metadata',
+    titleKey: '模型参数表',
+    build: () => <ModelMetadataSection />,
   },
 ] as const
 
