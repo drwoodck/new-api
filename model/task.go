@@ -65,7 +65,13 @@ type Task struct {
 	FinishTime int64                 `json:"finish_time" gorm:"index"`
 	Progress   string                `json:"progress" gorm:"type:varchar(20);index"`
 	Properties Properties            `json:"properties" gorm:"type:json"`
-	Username   string                `json:"username,omitempty" gorm:"-"`
+	// ModelName 是发起时请求的模型名(OriginModelName),从 Properties 冗余出来的
+	// 独立列 —— 后台按模型筛任务时查这一列。放独立列而不是查 properties 的 JSON:
+	// MySQL/SQLite/PostgreSQL 三家的 JSON 提取语法各不相同(JSON_EXTRACT /
+	// json_extract / ->>),且 JSON 表达式走不了索引。写入点只有一个(InitTask)。
+	// 加列由 AutoMigrate 完成,存量行为空(不回填)。
+	ModelName string                `json:"model_name" gorm:"type:varchar(191);index"`
+	Username  string                `json:"username,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
@@ -191,6 +197,7 @@ type SyncTaskQueryParams struct {
 	UserID         string
 	Action         string
 	Status         string
+	ModelName      string
 	StartTimestamp int64
 	EndTimestamp   int64
 	UserIDs        []int
@@ -230,6 +237,10 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 		ChannelId:   relayInfo.ChannelId,
 		Platform:    platform,
 		Properties:  properties,
+		// 取已填好的 properties 而非 relayInfo.OriginModelName:上面那段填
+		// properties 的前提是 ChannelMeta 非空,直接解引用 relayInfo 在这里
+		// 既多一个 nil 风险,也可能与 properties 里的值不一致。
+		ModelName:   properties.OriginModelName,
 		PrivateData: privateData,
 	}
 	return t
@@ -253,6 +264,9 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 	}
 	if queryParams.Platform != "" {
 		query = query.Where("platform = ?", queryParams.Platform)
+	}
+	if queryParams.ModelName != "" {
+		query = query.Where("model_name = ?", queryParams.ModelName)
 	}
 	if queryParams.StartTimestamp != 0 {
 		// 假设您已将前端传来的时间戳转换为数据库所需的时间格式，并处理了时间戳的验证和解析
@@ -299,6 +313,9 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 	}
 	if queryParams.Status != "" {
 		query = query.Where("status = ?", queryParams.Status)
+	}
+	if queryParams.ModelName != "" {
+		query = query.Where("model_name = ?", queryParams.ModelName)
 	}
 	if queryParams.StartTimestamp != 0 {
 		query = query.Where("submit_time >= ?", queryParams.StartTimestamp)
@@ -534,6 +551,9 @@ func TaskCountAllTasks(queryParams SyncTaskQueryParams) int64 {
 	if queryParams.Status != "" {
 		query = query.Where("status = ?", queryParams.Status)
 	}
+	if queryParams.ModelName != "" {
+		query = query.Where("model_name = ?", queryParams.ModelName)
+	}
 	if queryParams.StartTimestamp != 0 {
 		query = query.Where("submit_time >= ?", queryParams.StartTimestamp)
 	}
@@ -559,6 +579,9 @@ func TaskCountAllUserTask(userId int, queryParams SyncTaskQueryParams) int64 {
 	}
 	if queryParams.Platform != "" {
 		query = query.Where("platform = ?", queryParams.Platform)
+	}
+	if queryParams.ModelName != "" {
+		query = query.Where("model_name = ?", queryParams.ModelName)
 	}
 	if queryParams.StartTimestamp != 0 {
 		query = query.Where("submit_time >= ?", queryParams.StartTimestamp)

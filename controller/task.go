@@ -24,6 +24,7 @@ func GetAllTask(c *gin.Context) {
 		TaskID:         c.Query("task_id"),
 		Status:         c.Query("status"),
 		Action:         c.Query("action"),
+		ModelName:      c.Query("model_name"),
 		StartTimestamp: startTimestamp,
 		EndTimestamp:   endTimestamp,
 		ChannelID:      c.Query("channel_id"),
@@ -49,6 +50,7 @@ func GetUserTask(c *gin.Context) {
 		TaskID:         c.Query("task_id"),
 		Status:         c.Query("status"),
 		Action:         c.Query("action"),
+		ModelName:      c.Query("model_name"),
 		StartTimestamp: startTimestamp,
 		EndTimestamp:   endTimestamp,
 	}
@@ -83,6 +85,12 @@ func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
 			}
 		}
 		result[i] = relay.TaskModel2Dto(task)
+		// 计费上下文/上游任务 ID/产物路径只给管理员(fillUser 即管理员视角):
+		// 这里含 model_price 与 group_ratio,是定价结构,不能随用户接口出去。
+		// 用户路径(GetUserTask, fillUser=false)保持原样。
+		if fillUser {
+			result[i].PrivateData = relay.TaskPrivateData2Dto(task)
+		}
 	}
 	return result
 }

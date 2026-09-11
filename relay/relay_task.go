@@ -700,5 +700,30 @@ func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 		Properties: task.Properties,
 		Username:   task.Username,
 		Data:       task.Data,
+		ModelName:  task.ModelName,
+		// PrivateData 刻意不在这里填:同一个函数既服务管理员后台,也服务
+		// 用户自己的任务查询接口(sunoFetchByIDRespBodyBuilder /
+		// videoFetchByIDRespBodyBuilder),而其中 BillingContext 带着
+		// model_price 与 group_ratio —— 发给用户等于把定价结构交出去。
+		// 管理员路径在 controller 的 tasksToDto 里单独补(见 TaskPrivateData2Dto)。
+	}
+}
+
+// TaskPrivateData2Dto 把任务的私有数据投影成对外 DTO。**只给管理员路径用** ——
+// 里面含计费成本参数与上游任务 ID,不是给最终用户看的。
+//
+// 逐字段拷贝而非整体透传:源结构体的 Key 存的是上游渠道 API key,这里不碰它,
+// 它在 dto.TaskPrivateDataDto 上也没有对应字段,从类型上就发不出去。
+func TaskPrivateData2Dto(task *model.Task) *dto.TaskPrivateDataDto {
+	pd := task.PrivateData
+	return &dto.TaskPrivateDataDto{
+		UpstreamTaskID: pd.UpstreamTaskID,
+		ResultURL:      pd.ResultURL,
+		BillingSource:  pd.BillingSource,
+		TokenId:        pd.TokenId,
+		NodeName:       pd.NodeName,
+		BillingContext: pd.BillingContext,
+		ArtifactPath:   pd.ArtifactPath,
+		ArtifactNode:   pd.ArtifactNode,
 	}
 }

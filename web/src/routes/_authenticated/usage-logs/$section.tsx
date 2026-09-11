@@ -39,6 +39,10 @@ const usageLogsSearchSchema = z.object({
   type: logTypeSearchSchema.optional(),
   filter: z.string().optional().catch(''),
   model: z.string().optional().catch(''),
+  // task 专用:平台 / 状态。按字符串收、不在这里限定取值 —— 用 enum 会让
+  // 「手输一个不存在的平台」变成整页校验失败,筛选器本身反而更难用。
+  platform: z.string().optional().catch(''),
+  status: z.string().optional().catch(''),
   token: z.string().optional().catch(''),
   channel: z.string().optional().catch(''),
   group: z.string().optional().catch(''),

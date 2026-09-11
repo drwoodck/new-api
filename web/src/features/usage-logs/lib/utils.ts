@@ -287,7 +287,14 @@ export async function fetchLogsByCategory(
       ? { mj_id: searchParams.filter as string | undefined }
       : {}),
     ...(logCategory === 'task'
-      ? { task_id: searchParams.filter as string | undefined }
+      ? {
+          task_id: searchParams.filter as string | undefined,
+          // 三个 URL key → 三个后端 query 参数。模型这里叫 model_name 而不是
+          // model:后端读的是 tasks.model_name 列。
+          model_name: searchParams.model as string | undefined,
+          platform: searchParams.platform as string | undefined,
+          status: searchParams.status as string | undefined,
+        }
       : {}),
   }
 

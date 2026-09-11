@@ -68,6 +68,10 @@ export interface DrawingLogFilters extends CommonFilters {
  */
 export interface TaskLogFilters extends CommonFilters {
   taskId?: string
+  /** 按模型筛:后端查 tasks.model_name 列(存量行该列为空,筛不到) */
+  model?: string
+  platform?: string
+  status?: string
 }
 
 /**
@@ -292,6 +296,42 @@ export interface MidjourneyLog {
 // Task Logs Types
 // ============================================================================
 
+/**
+ * 计费参数快照,对应后端 model.TaskBillingContext。字段只是**已知**的那批 ——
+ * 详情抽屉里展示原始 JSON 时走 JSON.stringify,不受这里限制;后端将来加字段
+ * 也不会让页面报错,只是没被专门渲染。
+ */
+export interface TaskBillingContext {
+  model_price?: number
+  group_ratio?: number
+  model_ratio?: number
+  other_ratios?: Record<string, number>
+  origin_model_name?: string
+  per_call_billing?: boolean
+  second_price?: number
+  tier_billing?: boolean
+  tier_type?: string
+  tier_key?: string
+  material_quota?: number
+}
+
+/**
+ * 任务的排查信息,对应后端 dto.TaskPrivateDataDto。
+ *
+ * **只有管理员接口会返回**(用户自查任务的接口刻意不带 —— 里面有 model_price
+ * 与 group_ratio,是定价结构)。后端投影里也不含上游渠道 API key。
+ */
+export interface TaskPrivateData {
+  upstream_task_id?: string
+  result_url?: string
+  billing_source?: string
+  token_id?: number
+  node_name?: string
+  billing_context?: TaskBillingContext | null
+  artifact_path?: string
+  artifact_node?: string
+}
+
 export interface TaskLog {
   id: number
   user_id: number
@@ -310,6 +350,19 @@ export interface TaskLog {
   other?: string
   created_at?: number
   updated_at?: number
+  /** 发起时请求的模型名。加列之前的历史任务为空 */
+  model_name?: string
+  /** 消耗额度 */
+  quota?: number
+  /**
+   * 任务结果地址。**注意后端 GetResultURL() 在没有结果时返回的是 FailReason**
+   * —— 渲染前必须判它是不是真的 URL,否则会把失败原因塞进 href。
+   */
+  result_url?: string
+  /** 请求参数(后端 properties 原样透传) */
+  properties?: Record<string, unknown> | null
+  /** 计费上下文与上游任务 ID 等,仅管理员接口返回 */
+  private_data?: TaskPrivateData | null
 }
 
 // ============================================================================
@@ -383,6 +436,10 @@ export interface GetTaskLogsParams {
   page_size?: number
   channel_id?: string
   task_id?: string
+  // 与后端 controller.GetAllTask 读的 query 参数逐字对应
+  model_name?: string
+  platform?: string
+  status?: string
   start_timestamp?: number
   end_timestamp?: number
 }

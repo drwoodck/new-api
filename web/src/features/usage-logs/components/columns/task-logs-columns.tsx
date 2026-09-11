@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { ColumnDef } from '@tanstack/react-table'
-import { Music } from 'lucide-react'
+import { Info, Music } from 'lucide-react'
 /* eslint-disable react-refresh/only-export-components */
 import { useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -36,6 +36,8 @@ import {
   type AudioClip,
 } from '../dialogs/audio-preview-dialog'
 import { FailReasonDialog } from '../dialogs/fail-reason-dialog'
+import { TaskDetailsDrawer } from '../drawers/task-details-drawer'
+import { LogCostDisplay } from '../log-cost-display'
 import { useUsageLogsContext } from '../usage-logs-provider'
 import {
   createDurationColumn,
@@ -213,6 +215,106 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
       },
     },
     createProgressColumn<TaskLog>({ headerLabel: t('Progress') }),
+    // —— 模型 / 平台 / 费用 / 结果 ——
+    // 此前任务日志只有「时间/用户/TaskID/状态/失败原因」,看不出这条任务
+    // 到底用了什么模型、花了多少、产出了什么。
+    {
+      id: 'model_name',
+      header: t('Model'),
+      cell: ({ row }) => {
+        const modelName = row.original.model_name
+        return modelName ? (
+          <span className='truncate font-mono text-xs'>{modelName}</span>
+        ) : (
+          // 本列为空 = 加列之前的历史任务(未回填),不是异常
+          <span className='text-muted-foreground text-xs'>--</span>
+        )
+      },
+    },
+    {
+      id: 'platform',
+      header: t('Platform'),
+      cell: ({ row }) => (
+        <span className='truncate text-xs'>
+          {row.original.platform || '--'}
+        </span>
+      ),
+    },
+    {
+      id: 'quota',
+      header: t('Cost'),
+      cell: ({ row }) => {
+        const quota = row.original.quota
+        if (!quota) {
+          return <span className='text-muted-foreground text-xs'>--</span>
+        }
+        // 复用 common 日志那一列的同一个组件,两处额度显示口径必然一致。
+        // other 传 null:tasks 表没有 other 列(见 model/task.go 的结构体),
+        // 组件内部对 null 有 ?. 保护,落到默认的 QuotaBadge 分支。
+        return <LogCostDisplay quota={quota} other={null} />
+      },
+    },
+    {
+      id: 'result',
+      header: t('Result'),
+      cell: function ResultCell({ row }) {
+        const log = row.original
+        if (log.status !== TASK_STATUS.SUCCESS) {
+          return <span className='text-muted-foreground text-xs'>--</span>
+        }
+        // 上游直链只在管理员接口里(private_data),且**必须判它真是 URL** ——
+        // 后端 GetResultURL() 在没有结果时返回的是 FailReason,不判格式就会
+        // 把失败原因塞进 href。
+        const upstream = log.private_data?.result_url
+        const href =
+          isAdmin && upstream && /^https?:\/\//i.test(upstream)
+            ? upstream
+            : // 非管理员(或上游直链缺失/过期)走代理:它优先读本地落盘副本,
+              // 回退实时上游。管理员不能用这个 —— 代理按 userID 查任务,
+              // 管理员点别人的任务会 404。
+              `/v1/videos/${encodeURIComponent(log.task_id)}/content`
+        return (
+          <a
+            href={href}
+            target='_blank'
+            rel='noreferrer'
+            className='text-primary text-xs hover:underline'
+          >
+            {t('Click to preview')}
+          </a>
+        )
+      },
+    },
+    {
+      // 详情入口做成独立一列而不是整行 onClick:DataTableRowInner 的 memo
+      // 比较器不含 onClick,传内联闭包会遇到「其他项没变 → 跳过渲染 →
+      // 闭包过期」。列 cell 自己持有开关状态也与本文件既有的
+      // AudioPreviewCell / FailReasonDialog 同一模式。
+      id: 'task_details',
+      header: t(''),
+      cell: function TaskDetailsCell({ row }) {
+        const [open, setOpen] = useState(false)
+        return (
+          <>
+            <button
+              type='button'
+              className='group flex items-center gap-1 text-left text-xs'
+              onClick={() => setOpen(true)}
+            >
+              <Info className='text-muted-foreground size-3' />
+              <span className='text-foreground leading-snug group-hover:underline'>
+                {t('Details')}
+              </span>
+            </button>
+            <TaskDetailsDrawer
+              log={row.original}
+              open={open}
+              onOpenChange={setOpen}
+            />
+          </>
+        )
+      },
+    },
     {
       accessorKey: 'fail_reason',
       header: t('Details'),

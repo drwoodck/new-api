@@ -19,9 +19,19 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQueryClient, useIsFetching } from '@tanstack/react-query'
 import { useNavigate, getRouteApi } from '@tanstack/react-router'
 import { type Table } from '@tanstack/react-table'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+
+import { TASK_STATUS } from '../constants'
 import { buildSearchParams } from '../lib/filter'
 import { getDefaultTimeRange } from '../lib/utils'
 import type { DrawingLogFilters, LogCategory, TaskLogFilters } from '../types'
@@ -97,6 +107,13 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
         : {
             ...baseFilters,
             ...(searchParams.filter ? { taskId: searchParams.filter } : {}),
+            // 三个 task 专用筛选也要从 URL 还原,否则刷新/分享链接/后退回来
+            // 只有时间范围还在,其余筛选静默失效而输入框显示为空
+            ...(searchParams.model ? { model: searchParams.model } : {}),
+            ...(searchParams.platform
+              ? { platform: searchParams.platform }
+              : {}),
+            ...(searchParams.status ? { status: searchParams.status } : {}),
           }
 
     setFilters(next)
@@ -106,10 +123,18 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
     searchParams.endTime,
     searchParams.channel,
     searchParams.filter,
+    searchParams.model,
+    searchParams.platform,
+    searchParams.status,
   ])
 
+  // field 收窄到 TaskLogFilters 的 key:TaskLogsFilters 是
+  // DrawingLogFilters | TaskLogFilters 的联合,对它取 keyof 得到的是**交集**
+  // (只剩 channel/startTime/endTime),新增的 model/platform/status 传不进来。
+  // TaskLogFilters 覆盖 CommonFilters 那三个,是这个联合的超集,拿它当参数
+  // 类型对两个分类都成立(drawing 的 mjId 走的是 setFilterValue,不经这里)。
   const handleChange = useCallback(
-    (field: keyof TaskLogsFilters, value: Date | string | undefined) => {
+    (field: keyof TaskLogFilters, value: Date | string | undefined) => {
       setFilters((prev) => ({ ...prev, [field]: value }))
     },
     []
@@ -164,7 +189,15 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
     props.logCategory === 'drawing'
       ? t('Filter by MjProxy task ID')
       : t('Filter by task ID')
-  const hasAdditionalFilters = !!filterValue || !!filters.channel
+  const hasAdditionalFilters =
+    !!filterValue ||
+    !!filters.channel ||
+    (props.logCategory === 'task' &&
+      !!(
+        (filters as TaskLogFilters).model ||
+        (filters as TaskLogFilters).platform ||
+        (filters as TaskLogFilters).status
+      ))
   const dateRangeFilter = (
     <LogsFilterField wide>
       <CompactDateTimeRangePicker
@@ -199,6 +232,80 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
     </LogsFilterField>
   ) : null
 
+  // —— task 专用筛选(模型 / 平台 / 状态)——
+  //
+  // 状态是前后端共用的那套字面量枚举(NOT_START/QUEUED/...),给下拉;
+  // 模型与平台取值不固定(platform 既有 'suno' 这种名字,也有 '55' 这种
+  // 渠道类型数字),给文本输入 —— 下拉列不全反而筛不到。
+  //
+  // 三个都只在 task 分类渲染:drawing 日志没有这几个字段,后端也不认这些参数。
+  const isTaskCategory = props.logCategory === 'task'
+  const taskFilters = filters as TaskLogFilters
+  const statusItems = useMemo(
+    () => [
+      { value: '', label: t('All Statuses') },
+      ...Object.values(TASK_STATUS).map((status) => ({
+        value: status,
+        label: status,
+      })),
+    ],
+    [t]
+  )
+  const modelFilter = isTaskCategory ? (
+    <LogsFilterField>
+      <LogsFilterInput
+        aria-label={t('Model')}
+        placeholder={t('Filter by model')}
+        value={taskFilters.model || ''}
+        onChange={(e) => handleChange('model', e.target.value)}
+        onKeyDown={handleKeyDown}
+      />
+    </LogsFilterField>
+  ) : null
+  const platformFilter = isTaskCategory ? (
+    <LogsFilterField>
+      <LogsFilterInput
+        aria-label={t('Platform')}
+        placeholder={t('Filter by platform')}
+        value={taskFilters.platform || ''}
+        onChange={(e) => handleChange('platform', e.target.value)}
+        onKeyDown={handleKeyDown}
+      />
+    </LogsFilterField>
+  ) : null
+  const statusFilter = isTaskCategory ? (
+    <LogsFilterField>
+      <Select
+        items={statusItems}
+        value={taskFilters.status ?? ''}
+        onValueChange={(value) =>
+          // 清空项的值是空串,未选中时是 null —— 两种都归一成 undefined,
+          // 免得空筛选被当成「筛 status 为空」
+          handleChange(
+            'status',
+            value === '' || value === null ? undefined : value
+          )
+        }
+      >
+        <SelectTrigger>
+          <SelectValue>
+            {statusItems.find((s) => s.value === (taskFilters.status ?? ''))
+              ?.label ?? t('All Statuses')}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent alignItemWithTrigger={false}>
+          <SelectGroup>
+            {statusItems.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+    </LogsFilterField>
+  ) : null
+
   return (
     <LogsFilterToolbar
       table={props.table}
@@ -206,6 +313,9 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
         <>
           {dateRangeFilter}
           {taskIdFilter}
+          {modelFilter}
+          {platformFilter}
+          {statusFilter}
           {channelFilter}
         </>
       }
@@ -213,10 +323,21 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
       mobileFilters={
         <>
           {taskIdFilter}
+          {modelFilter}
+          {platformFilter}
+          {statusFilter}
           {channelFilter}
         </>
       }
-      mobileFilterCount={[filterValue, filters.channel].filter(Boolean).length}
+      mobileFilterCount={
+        [
+          filterValue,
+          filters.channel,
+          isTaskCategory ? taskFilters.model : '',
+          isTaskCategory ? taskFilters.platform : '',
+          isTaskCategory ? taskFilters.status : '',
+        ].filter(Boolean).length
+      }
       hasActiveFilters={hasAdditionalFilters}
       onSearch={handleApply}
       searchLoading={fetchingLogs > 0}
