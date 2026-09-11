@@ -206,6 +206,29 @@ func getModelListGroups(c *gin.Context) (modelListGroups, error) {
 	}, nil
 }
 
+// hasBillingConfigForUser 判定模型对 ownerGroups 之一是否"可计费"。
+//
+// 判定口径与计费路径(ResolveGroupPriceFromPreloaded)一致:
+//   - 模型启用了分组定价 → 价格权威是 model_group_prices,该分组表里有价才算;
+//   - 未启用 → 走全局 ratio_setting(原有语义,行为完全不变)。
+//
+// 只看全局表会把"只在分组价格表里配了价"的模型整体滤掉 —— 商业部署的定价
+// 正是配在那里,表现出来就是 /v1/models 里没有这些模型。改动前必须确认两边
+// 口径一致,否则会出现"列表里没有、但调用又成功"或"列表里有、调用却报未配置"
+// 这类两侧对不上的状态。
+//
+// loadGroupPrices 由调用方注入:它负责惰性预载 + 缓存,不在本函数里查库。
+func hasBillingConfigForUser(
+	modelName string,
+	ownerGroups []string,
+	loadGroupPrices func() map[string]map[string]model.ModelGroupPrice,
+) bool {
+	if model.IsGroupPricingEnabled(modelName) {
+		return model.HasBillingConfigForAnyGroup(loadGroupPrices(), modelName, ownerGroups)
+	}
+	return helper.HasModelBillingConfig(modelName)
+}
+
 func ListModels(c *gin.Context, modelType int) {
 	acceptUnsetRatioModel := operation_setting.SelfUseModeEnabled
 	if !acceptUnsetRatioModel {
@@ -240,6 +263,29 @@ func ListModels(c *gin.Context, modelType int) {
 		}
 	}
 	models := service.GetGroupsEnabledModels(ownerGroups)
+
+	// 分组价格表惰性预载:只在确实要按分组判定时才查一次库,查完复用。
+	// 商业部署的定价配在模型编辑页的「分组价格设定」(model_group_prices),
+	// 启用分组定价的模型价格权威在那张表 —— 而 helper.HasModelBillingConfig
+	// 只认全局 ratio_setting。一律按全局表判定会让这些模型整体从 /v1/models
+	// 消失,画布拿该端点做能力对账,随之把目录里的模型判成「暂不可用」。
+	var groupPrices map[string]map[string]model.ModelGroupPrice
+	var groupPricesLoaded bool
+	loadGroupPrices := func() map[string]map[string]model.ModelGroupPrice {
+		if !groupPricesLoaded {
+			groupPricesLoaded = true
+			var err error
+			groupPrices, err = model.GetAllModelGroupPrices()
+			if err != nil {
+				// 查表失败按"该分组无价"处理(fail-closed):少展示一个可用的
+				// 模型,好过把调不通的模型摆给用户。
+				common.SysError("获取分组价格表失败,本次按未配置处理: " + err.Error())
+				groupPrices = nil
+			}
+		}
+		return groupPrices
+	}
+
 	for _, modelName := range models {
 		if modelLimitEnable {
 			matchingName := ratio_setting.FormatMatchingModelName(modelName)
@@ -247,7 +293,7 @@ func ListModels(c *gin.Context, modelType int) {
 				continue
 			}
 		}
-		if !acceptUnsetRatioModel && !helper.HasModelBillingConfig(modelName) {
+		if !acceptUnsetRatioModel && !hasBillingConfigForUser(modelName, ownerGroups, loadGroupPrices) {
 			continue
 		}
 		userModelNames = append(userModelNames, modelName)

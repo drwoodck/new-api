@@ -101,6 +101,42 @@ func GetAllModelGroupPrices() (map[string]map[string]ModelGroupPrice, error) {
 	return result, nil
 }
 
+// HasBillingConfigForAnyGroup 报告模型在给定分组之一是否配了有效价格。
+//
+// 与 resolveFromGroupPriceRow 同源判定:ModelPrice / ModelRatio / PriceTiers /
+// VideoSecondPrice 任一非空即为"该分组有价"(VideoSecondPrice 沿全局口径把
+// <=0 视为未启用)。纯内存判定,不查库 —— 表由调用方一次性预载后传入
+// (GetAllModelGroupPrices),批量场景下不要放进循环里逐次查。
+//
+// 存在意义:启用分组定价的模型,价格权威在这张表而不是全局 ratio_setting。
+// 只按全局表判定"有没有计费配置"会让这些模型整体从 /v1/models 消失。
+func HasBillingConfigForAnyGroup(
+	groupPrices map[string]map[string]ModelGroupPrice,
+	modelName string,
+	groups []string,
+) bool {
+	byGroup, ok := groupPrices[modelName]
+	if !ok {
+		return false
+	}
+	for _, group := range groups {
+		row, ok := byGroup[group]
+		if !ok {
+			continue
+		}
+		if row.ModelPrice != nil || row.ModelRatio != nil {
+			return true
+		}
+		if row.PriceTiers != nil && len(*row.PriceTiers) > 0 {
+			return true
+		}
+		if row.VideoSecondPrice != nil && *row.VideoSecondPrice > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // ReplaceModelGroupPrices 用给定的行整体替换某模型的分组价格配置(事务内删旧插新)。
 // rows 为空即清空该模型的全部分组价格 —— 用于"关闭分别定价模式"或"清空重配"。
 //

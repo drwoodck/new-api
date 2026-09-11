@@ -49,7 +49,7 @@ func setupModelListControllerTestDB(t *testing.T) *gorm.DB {
 	model.DB = db
 	model.LOG_DB = db
 
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}, &model.Ability{}, &model.Model{}, &model.Vendor{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}, &model.Ability{}, &model.Model{}, &model.Vendor{}, &model.ModelGroupPrice{}))
 
 	t.Cleanup(func() {
 		sqlDB, err := db.DB()
@@ -342,6 +342,79 @@ func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 	require.True(t, ok)
 	require.Empty(t, missingExprPricing.BillingMode)
 	require.Empty(t, missingExprPricing.BillingExpr)
+}
+
+// 商业部署的定价配在「模型编辑 → 分组价格设定」(model_group_prices),
+// 启用分组定价的模型价格权威在那张表 —— 而 /v1/models 的过滤此前一律查
+// 全局 ratio_setting。结果是「只在分组价格表里配了价」的模型整体消失,
+// 画布拿 /v1/models 做能力对账,随之把目录里的模型判成「暂不可用」。
+//
+// 这条用例把两边口径钉在一起:启用分组定价 → 按分组表判定;
+// 未启用 → 仍按全局表判定(原有行为不变)。
+func TestListModelsIncludesGroupPricedModels(t *testing.T) {
+	withSelfUseModeDisabled(t)
+
+	db := setupModelListControllerTestDB(t)
+	seedEnabledChannels(t, 1)
+	require.NoError(t, db.Create(&model.User{
+		Id:       1004,
+		Username: "group-priced-user",
+		Password: "password",
+		Group:    "团队",
+		Status:   common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "团队", Model: "zz-group-priced-model", ChannelId: 1, Enabled: true},
+		{Group: "团队", Model: "zz-group-unpriced-model", ChannelId: 1, Enabled: true},
+		{Group: "团队", Model: "zz-priced-elsewhere-model", ChannelId: 1, Enabled: true},
+		{Group: "团队", Model: "zz-global-priced-model", ChannelId: 1, Enabled: true},
+	}).Error)
+	require.NoError(t, db.Create(&[]model.Model{
+		{ModelName: "zz-group-priced-model", GroupPricingEnabled: true, Status: 1, NameRule: model.NameRuleExact},
+		{ModelName: "zz-group-unpriced-model", GroupPricingEnabled: true, Status: 1, NameRule: model.NameRuleExact},
+		{ModelName: "zz-priced-elsewhere-model", GroupPricingEnabled: true, Status: 1, NameRule: model.NameRuleExact},
+		{ModelName: "zz-global-priced-model", GroupPricingEnabled: false, Status: 1, NameRule: model.NameRuleExact},
+	}).Error)
+
+	price := 0.5
+	require.NoError(t, db.Create(&[]model.ModelGroupPrice{
+		// 本分组下有价 → 必须可见
+		{ModelName: "zz-group-priced-model", GroupName: "团队", ModelPrice: &price},
+		// 有行但价格维度全空 → 不算「有计费配置」
+		{ModelName: "zz-group-unpriced-model", GroupName: "团队"},
+		// 价配在别的分组 → 对本分组无效
+		{ModelName: "zz-priced-elsewhere-model", GroupName: "别的分组", ModelPrice: &price},
+	}).Error)
+
+	// 全局价只给非分组定价的那个模型 —— 这样「一律只看全局表」的旧逻辑
+	// 会让 zz-group-priced-model 消失,回归时这条用例立刻红。
+	savedPrices := ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrices))
+	})
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(
+		`{"zz-global-priced-model":0.3}`))
+
+	// IsGroupPricingEnabled 读的是 updatePricing 填充的内存缓存,
+	// 必须先失效再触发一次,否则读到的是上一个用例留下的空表。
+	model.InvalidatePricingCache()
+	require.NotEmpty(t, model.GetPricing())
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx.Set("id", 1004)
+
+	ListModels(ctx, constant.ChannelTypeOpenAI)
+
+	ids := decodeListModelsResponse(t, recorder)
+	// 修复的核心:分组价格表里有价就该出现,哪怕全局表里没有它
+	require.Contains(t, ids, "zz-group-priced-model")
+	// 非分组定价模型仍按全局表判定,原有行为不变
+	require.Contains(t, ids, "zz-global-priced-model")
+	// 分组定价 + 本分组无价 → 计费会失败,不能摆给用户
+	require.NotContains(t, ids, "zz-group-unpriced-model")
+	require.NotContains(t, ids, "zz-priced-elsewhere-model")
 }
 
 func TestListModelsUsesAdvancedCustomEndpointTypesFromPricingCache(t *testing.T) {
