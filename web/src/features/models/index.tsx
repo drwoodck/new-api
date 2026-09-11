@@ -36,6 +36,7 @@ import { ModelsProvider, useModels } from './components/models-provider'
 import { ModelsTable } from './components/models-table'
 import { useModelDeploymentSettings } from './hooks/use-model-deployment-settings'
 import { OnboardingWorkbench } from '@/features/onboarding'
+import { CanvasCatalogSection } from '@/features/system-settings/models/canvas-catalog/canvas-catalog-section'
 import { deploymentsQueryKeys } from './lib'
 import {
   type ModelsSectionId,
@@ -55,6 +56,9 @@ const SECTION_META: Record<ModelsSectionId, { titleKey: string }> = {
   onboarding: {
     titleKey: '上新工作台',
   },
+  'canvas-catalog': {
+    titleKey: '画布模型目录',
+  },
 }
 
 function ModelsContent() {
@@ -70,6 +74,9 @@ function ModelsContent() {
 
   // keep context state in sync (for components that rely on it)
   useEffect(() => {
+    // tabCategory 只建模了 元信息/部署/上新工作台 三类(ModelTabCategory),
+    // 「画布模型目录」不在其中 —— 直接跳过,不为它扩这个类型。
+    if (activeSection === 'canvas-catalog') return
     if (tabCategory !== activeSection) {
       setTabCategory(activeSection)
     }
@@ -89,6 +96,7 @@ function ModelsContent() {
   const renderSectionContent = () => {
     if (activeSection === 'metadata') return <ModelsTable />
     if (activeSection === 'onboarding') return <OnboardingWorkbench />
+    if (activeSection === 'canvas-catalog') return <CanvasCatalogSection />
     return <DeploymentsSection />
   }
 

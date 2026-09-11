@@ -16,9 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { createSectionRegistry } from '@/features/system-settings/utils/section-registry'
-
 import { OnboardingWorkbench } from '@/features/onboarding'
+import { CanvasCatalogSection } from '@/features/system-settings/models/canvas-catalog/canvas-catalog-section'
+import { createSectionRegistry } from '@/features/system-settings/utils/section-registry'
 
 /**
  * Models page section definitions
@@ -38,6 +38,13 @@ const MODELS_SECTIONS = [
     id: 'onboarding',
     titleKey: '上新工作台',
     build: () => <OnboardingWorkbench />,
+  },
+  {
+    // 与「元信息」并列:目录决定模型能不能被选中,参数表决定选中后有哪些
+    // 参数可调 —— 两者都是「这个模型对外长什么样」,放同一页少跳一次菜单。
+    id: 'canvas-catalog',
+    titleKey: '画布模型目录',
+    build: () => <CanvasCatalogSection />,
   },
 ] as const
 

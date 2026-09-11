@@ -31,6 +31,7 @@ import {
 } from '@/lib/excel-export'
 
 import { SettingsSection } from '../../components/settings-section'
+import { ModelMetadataPanel } from '../model-metadata/model-metadata-panel'
 import { CanvasCatalogFormDialog } from './components/canvas-catalog-form-dialog'
 import {
   CanvasCatalogOverviewTable,
@@ -98,7 +99,9 @@ export function CanvasCatalogSection() {
   const [deleteTarget, setDeleteTarget] =
     useState<CanvasCatalogOverviewRow | null>(null)
   // 受控页签:导出按钮导的是当前这一页,得知道看的是哪一页。
-  const [activeTab, setActiveTab] = useState<'configured' | 'unconfigured'>(
+  const [activeTab, setActiveTab] = useState<
+    'configured' | 'unconfigured' | 'metadata'
+  >(
     'configured'
   )
 
@@ -227,7 +230,7 @@ export function CanvasCatalogSection() {
       <Tabs
         value={activeTab}
         onValueChange={(value) =>
-          setActiveTab(value as 'configured' | 'unconfigured')
+          setActiveTab(value as 'configured' | 'unconfigured' | 'metadata')
         }
         className='space-y-3'
       >
@@ -239,21 +242,27 @@ export function CanvasCatalogSection() {
             <TabsTrigger value='unconfigured'>
               {t('未配置')} ({unconfigured.length})
             </TabsTrigger>
+            {/* 参数表与目录是一件事的两面：目录决定模型能不能被选中,
+                参数表决定选中后有哪些参数可调。放同一个分区里,配模型时
+                不必在两个菜单之间来回跳。 */}
+            <TabsTrigger value='metadata'>{t('模型参数表')}</TabsTrigger>
           </TabsList>
-          <div className='flex items-center gap-2'>
-            <Button
-              size='sm'
-              variant='outline'
-              onClick={() => handleExport(activeTab)}
-            >
-              <Download className='mr-1.5 h-4 w-4' />
-              {t('导出 Excel')}
-            </Button>
-            <Button size='sm' variant='outline' onClick={handleCreate}>
-              <Plus className='mr-1.5 h-4 w-4' />
-              {t('手动新增条目')}
-            </Button>
-          </div>
+          {activeTab !== 'metadata' && (
+            <div className='flex items-center gap-2'>
+              <Button
+                size='sm'
+                variant='outline'
+                onClick={() => handleExport(activeTab)}
+              >
+                <Download className='mr-1.5 h-4 w-4' />
+                {t('导出 Excel')}
+              </Button>
+              <Button size='sm' variant='outline' onClick={handleCreate}>
+                <Plus className='mr-1.5 h-4 w-4' />
+                {t('手动新增条目')}
+              </Button>
+            </div>
+          )}
         </div>
 
         <TabsContent value='configured' className='space-y-3'>
@@ -286,6 +295,10 @@ export function CanvasCatalogSection() {
             onDelete={(row) => setDeleteTarget(row)}
             onGoPricing={handleGoPricing}
           />
+        </TabsContent>
+
+        <TabsContent value='metadata' className='space-y-3'>
+          <ModelMetadataPanel />
         </TabsContent>
       </Tabs>
 

@@ -34,7 +34,6 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-import { SettingsSection } from '../../components/settings-section'
 import {
   useModelMetadataDetail,
   useModelMetadataList,
@@ -69,7 +68,7 @@ function isValidJson(text: string): boolean {
  * model_name 必须与中转站目录里的 remote_id 逐字一致 —— 画布是拿 remote_id
  * 来这里查表的，对不上会静默查不到、没有任何报错。
  */
-export function ModelMetadataSection() {
+export function ModelMetadataPanel() {
   const { t } = useTranslation()
   const { data: rows = [], isLoading } = useModelMetadataList()
   const updateMutation = useUpdateModelMetadata()
@@ -196,8 +195,7 @@ export function ModelMetadataSection() {
 
   if (editingName !== null) {
     return (
-      <SettingsSection title={t('模型参数表')}>
-        <div className='space-y-3'>
+      <div className='space-y-3'>
           <div className='flex flex-wrap items-center gap-3'>
             <span className='text-muted-foreground text-xs'>
               {t('模型名（必须与目录的 remote_id 逐字一致）')}
@@ -234,14 +232,12 @@ export function ModelMetadataSection() {
               {t('取消')}
             </Button>
           </div>
-        </div>
-      </SettingsSection>
+      </div>
     )
   }
 
   return (
-    <SettingsSection title={t('模型参数表')}>
-      <div className='space-y-3'>
+    <div className='space-y-3'>
         <p className='text-muted-foreground text-sm'>
           {t(
             '决定画布节点设置面板显示哪些参数。模型名必须与目录的 remote_id 逐字一致 —— 画布是拿 remote_id 来查这张表的，对不上会静默查不到。'
@@ -254,7 +250,6 @@ export function ModelMetadataSection() {
         </Button>
 
         {renderList()}
-      </div>
-    </SettingsSection>
+    </div>
   )
 }

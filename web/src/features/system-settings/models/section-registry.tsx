@@ -21,12 +21,10 @@ import { IoNetDeploymentSettingsSection } from '../integrations/ionet-deployment
 import { VolcAssetSettingsSection } from '../integrations/volc-asset-settings-section'
 import type { ModelSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
-import { CanvasCatalogSection } from './canvas-catalog/canvas-catalog-section'
 import { ClaudeSettingsCard } from './claude-settings-card'
 import { GeminiSettingsCard } from './gemini-settings-card'
 import { GlobalSettingsCard } from './global-settings-card'
 import { GrokSettingsCard } from './grok-settings-card'
-import { ModelMetadataSection } from './model-metadata/model-metadata-section'
 import { RoutingReliabilitySection } from './routing-reliability-section'
 
 function formatJsonForEditor(value: string, fallback: string) {
@@ -195,16 +193,8 @@ const MODELS_SECTIONS = [
       />
     ),
   },
-  {
-    id: 'canvas-catalog',
-    titleKey: '画布模型目录',
-    build: () => <CanvasCatalogSection />,
-  },
-  {
-    id: 'model-metadata',
-    titleKey: '模型参数表',
-    build: () => <ModelMetadataSection />,
-  },
+  // 「画布模型目录」已移到 管理员 → 模型 页（与「元信息」并列），
+  // 参数表作为它的一个标签页。配模型时不必在系统设置与模型页之间来回跳。
 ] as const
 
 export type ModelSectionId = (typeof MODELS_SECTIONS)[number]['id']
