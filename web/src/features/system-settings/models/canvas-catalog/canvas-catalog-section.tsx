@@ -40,6 +40,10 @@ import {
   formatOverviewGroupPrice,
   formatOverviewStatus,
 } from './components/canvas-catalog-overview-table'
+import {
+  matchesQuery,
+  TableSearchInput,
+} from './components/table-search-input'
 import { useCanvasCatalogOverview } from './hooks/use-canvas-catalog'
 import {
   useDeleteCanvasCatalogModel,
@@ -88,6 +92,17 @@ function buildOverviewExportSheet(
       buildEffectivePriceSummary(row, t),
     ]),
   }
+}
+
+// 目录行的可检索字段:模型名(remote_id)、画布显示名、模型说明、启用分组。
+// 不搜契约名 —— 按契约筛是另一种意图,混进来只会让搜索结果难以预期。
+function overviewRowMatches(query: string, row: CanvasCatalogOverviewRow) {
+  return matchesQuery(query, [
+    row.model_name,
+    row.display_name,
+    row.description,
+    row.enable_groups.join(' '),
+  ])
 }
 
 export function CanvasCatalogSection() {
@@ -143,6 +158,22 @@ export function CanvasCatalogSection() {
     }
     return { configured: configuredRows, unconfigured: unconfiguredRows }
   }, [overviewRows])
+
+  // 两个页签各用各的搜索词 —— 它们看的是两批不相干的模型,共用一份查询
+  // 会让「切过去发现上一条搜索还生效」变成常态。
+  const [configuredQuery, setConfiguredQuery] = useState('')
+  const [unconfiguredQuery, setUnconfiguredQuery] = useState('')
+
+  // 过滤只作用于表格内容,页签上的计数仍取全量:计数代表「这一类有多少个」,
+  // 搜索时跟着变会让人以为数据被删了。
+  const visibleConfigured = useMemo(
+    () => configured.filter((row) => overviewRowMatches(configuredQuery, row)),
+    [configured, configuredQuery]
+  )
+  const visibleUnconfigured = useMemo(
+    () => unconfigured.filter((row) => overviewRowMatches(unconfiguredQuery, row)),
+    [unconfigured, unconfiguredQuery]
+  )
 
   const handleCreate = () => {
     setEditingId(null)
@@ -299,10 +330,20 @@ export function CanvasCatalogSection() {
           <p className='text-muted-foreground text-sm'>
             {t('画布客户端通过 /api/canvas/catalog 拉取以下条目。')}
           </p>
+          <TableSearchInput
+            value={configuredQuery}
+            onChange={setConfiguredQuery}
+            placeholder={t('搜索模型名 / 显示名 / 说明 / 分组')}
+            clearLabel={t('清除搜索')}
+          />
           <CanvasCatalogOverviewTable
-            rows={configured}
+            rows={visibleConfigured}
             mode='configured'
-            emptyContent={t('尚未有画布可用的模型。')}
+            emptyContent={
+              configuredQuery.trim() === ''
+                ? t('尚未有画布可用的模型。')
+                : t('没有匹配的模型。')
+            }
             onConfigure={handleConfigure}
             onEdit={handleEdit}
             onDelete={(row) => setDeleteTarget(row)}
@@ -318,10 +359,20 @@ export function CanvasCatalogSection() {
               '这些模型已在中转站启用,但还没有画布目录配置(缺显示名或契约,画布同步时会跳过)。'
             )}
           </p>
+          <TableSearchInput
+            value={unconfiguredQuery}
+            onChange={setUnconfiguredQuery}
+            placeholder={t('搜索模型名 / 显示名 / 说明 / 分组')}
+            clearLabel={t('清除搜索')}
+          />
           <CanvasCatalogOverviewTable
-            rows={unconfigured}
+            rows={visibleUnconfigured}
             mode='unconfigured'
-            emptyContent={t('所有已启用模型都已配置完成。')}
+            emptyContent={
+              unconfiguredQuery.trim() === ''
+                ? t('所有已启用模型都已配置完成。')
+                : t('没有匹配的模型。')
+            }
             onConfigure={handleConfigure}
             onEdit={handleEdit}
             onDelete={(row) => setDeleteTarget(row)}

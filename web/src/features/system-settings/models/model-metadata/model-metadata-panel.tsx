@@ -35,6 +35,10 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
+import {
+  matchesQuery,
+  TableSearchInput,
+} from '../canvas-catalog/components/table-search-input'
 import { useCanvasCatalogOverview } from '../canvas-catalog/hooks/use-canvas-catalog'
 import type { CanvasCatalogOverviewRow } from '../canvas-catalog/types'
 import {
@@ -88,6 +92,22 @@ export function ModelMetadataPanel() {
     for (const row of overviewRows) byName.set(row.model_name, row)
     return byName
   }, [overviewRows])
+
+  const [query, setQuery] = useState('')
+  // 能搜的字段与目录两张表对齐(模型名/显示名/说明),三张表的搜索行为
+  // 一致;参数表没有「启用分组」列,这里也不拿它参与匹配。
+  const visibleRows = useMemo(
+    () =>
+      rows.filter((row) => {
+        const overview = overviewByModelName.get(row.model_name)
+        return matchesQuery(query, [
+          row.model_name,
+          overview?.display_name,
+          overview?.description,
+        ])
+      }),
+    [rows, overviewByModelName, query]
+  )
 
   const [editingName, setEditingName] = useState<string | null>(null)
   const [draftName, setDraftName] = useState('')
@@ -161,6 +181,14 @@ export function ModelMetadataPanel() {
         </div>
       )
     }
+    // 有数据但被搜索滤空 —— 与「一条都没配」是两回事,文案必须分开
+    if (visibleRows.length === 0) {
+      return (
+        <div className='text-muted-foreground py-8 text-center text-sm'>
+          {t('没有匹配的模型。')}
+        </div>
+      )
+    }
     return (
       <Table>
         <TableHeader>
@@ -175,7 +203,7 @@ export function ModelMetadataPanel() {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((row) => {
+          {visibleRows.map((row) => {
             const configured =
               !!row.param_schema && row.param_schema.trim() !== ''
             const overview = overviewByModelName.get(row.model_name)
@@ -285,10 +313,18 @@ export function ModelMetadataPanel() {
           )}
         </p>
 
-        <Button type='button' variant='outline' size='sm' onClick={startCreate}>
-          <Plus data-icon='inline-start' />
-          {t('新增')}
-        </Button>
+        <div className='flex flex-wrap items-center gap-2'>
+          <TableSearchInput
+            value={query}
+            onChange={setQuery}
+            placeholder={t('搜索模型名 / 显示名 / 说明')}
+            clearLabel={t('清除搜索')}
+          />
+          <Button type='button' variant='outline' size='sm' onClick={startCreate}>
+            <Plus data-icon='inline-start' />
+            {t('新增')}
+          </Button>
+        </div>
 
         {renderList()}
     </div>
