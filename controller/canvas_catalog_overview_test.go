@@ -192,6 +192,37 @@ func TestCatalogOverviewIncludesCatalogRowsMissingFromAbilities(t *testing.T) {
 	assert.True(t, byName["orphaned-catalog-entry"].Ready)
 }
 
+// TestCatalogOverviewIncludesModelRowsMissingFromAbilitiesAndCatalog 锁住行集
+// 的**第三路来源**:一个模型在元信息页配了显示名/说明(那是画布展示的真源),
+// 但既没接渠道(不在 abilities)、也没建目录条目时,它必须仍然出现在总览里。
+//
+// 这是实测到的真实不一致:元信息页显示 45 个、总览只有 31 个,差的 14 个全是
+// 这一类 —— 运营方配完显示名回来找不到模型,会以为配置丢了。
+func TestCatalogOverviewIncludesModelRowsMissingFromAbilitiesAndCatalog(t *testing.T) {
+	router := setupCatalogOverviewTestDB(t)
+
+	// 只在 models 表里:元信息页配过,但没渠道、没目录条目
+	model.DB.Create(&model.Model{
+		ModelName:   "meta-only-model",
+		DisplayName: "只配了元信息",
+		Description: "还没接渠道",
+		Status:      1,
+	})
+
+	rows := getOverview(t, router)
+	byName := make(map[string]canvasCatalogOverviewRow, len(rows))
+	for _, r := range rows {
+		byName[r.ModelName] = r
+	}
+
+	require.Contains(t, byName, "meta-only-model", "元信息页配过的模型必须出现在总览里")
+	row := byName["meta-only-model"]
+	assert.Equal(t, "只配了元信息", row.MetaDisplayName)
+	assert.Equal(t, "还没接渠道", row.Description)
+	assert.False(t, row.Ready, "没有目录条目 → 归入未配置")
+	assert.Zero(t, row.CatalogID)
+}
+
 // TestCatalogOverviewUnknownContractIsNotReady 契约不在画布支持清单内 ——
 // 即便有目录行、有 display_name,也不能算 ready(画布会把这条整条跳过)。
 func TestCatalogOverviewUnknownContractIsNotReady(t *testing.T) {

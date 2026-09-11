@@ -293,15 +293,25 @@ func GetCanvasCatalogOverviewAdmin(c *gin.Context) {
 	}
 	sort.Strings(groupNames)
 
-	// 已启用模型名集合可能不完整覆盖"值得在总览里出现"的名字 —— 一个模型
-	// 已经建了目录条目,但因渠道停用/删除暂时不在 abilities 里,不该从总览
-	// 消失(否则运营方会看到一条自己配过的目录条目突然凭空不见)。取两者并集。
-	names := make(map[string]struct{}, len(enabledNames)+len(catalogRows))
+	// 行集是**三者并集**。任何一个来源缺失都会让运营方看到「我明明配过它,
+	// 这里却找不到」:
+	//
+	//  1. abilities 里启用的 —— 常规来源,正在供能的模型;
+	//  2. 已建目录条目的 —— 渠道停用/删除后 abilities 会消失,但配过的条目
+	//     不该凭空不见;
+	//  3. **models 表里的** —— 元信息页给一个模型配了显示名/说明(那是画布
+	//     展示的真源),但该模型还没接渠道、也没建目录条目时,前两个来源都
+	//     不含它,它会在本页整个消失。而元信息页显示的正是 models 表全量,
+	//     两页数量就此对不上(实机:45 vs 31,差的 14 个全是这一类)。
+	names := make(map[string]struct{}, len(enabledNames)+len(catalogRows)+len(modelRows))
 	for _, n := range enabledNames {
 		names[n] = struct{}{}
 	}
 	for _, cr := range catalogRows {
 		names[cr.RemoteID] = struct{}{}
+	}
+	for _, m := range modelRows {
+		names[m.ModelName] = struct{}{}
 	}
 
 	rows := make([]canvasCatalogOverviewRow, 0, len(names))

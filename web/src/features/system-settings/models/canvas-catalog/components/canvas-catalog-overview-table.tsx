@@ -125,7 +125,29 @@ export function CanvasCatalogOverviewTable(
           cellClassName: 'font-medium',
           wrap: true,
           defaultWidth: 180,
-          cell: (r) => r.display_name || '--',
+          cell: (r) => {
+            // **与下发给画布的顺序一致**:目录端点 toWireModel 取的是
+            // 「models 表的 display_name 优先,空则回退目录条目的」。
+            // 这里若只显示目录条目的值,运营方在管理页看到的与画布真正
+            // 看到的名字可能不是同一个。
+            const effective = r.meta_display_name || r.display_name
+            if (!effective) return '--'
+            const overridden =
+              r.meta_display_name &&
+              r.display_name &&
+              r.meta_display_name !== r.display_name
+            return (
+              <span className='flex flex-col gap-0.5'>
+                <span>{effective}</span>
+                {overridden && (
+                  <span className='text-muted-foreground text-xs font-normal'>
+                    {t('目录条目原名：')}
+                    {r.display_name}
+                  </span>
+                )}
+              </span>
+            )
+          },
         },
         {
           // 说明真源在 models 表(元信息页维护),目录侧只读,这里同步展示。

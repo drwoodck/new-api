@@ -370,7 +370,7 @@ export function CanvasCatalogSection() {
         >
           <p className='text-muted-foreground text-sm'>
             {t(
-              '这些模型已在中转站启用,但还没有画布目录配置(缺显示名或契约,画布同步时会跳过)。'
+              '这些模型还没有画布目录配置(缺显示名或契约,画布同步时会跳过)。既包含已在中转站启用、只差目录配置的,也包含已在元信息页配过、但还没接渠道的。'
             )}
           </p>
           <TableSearchInput
