@@ -101,6 +101,59 @@ func TestGetCatalogETag304(t *testing.T) {
 	assert.NotEqual(t, etag, w3.Header().Get("ETag"))
 }
 
+// TestGetCatalogETagWeakComparison 回归:If-None-Match 必须按 RFC 9110 §13.1.2
+// 做**弱比较**,而不是字节强比较。
+//
+// 为什么要这条:本服务挂在 Cloudflare 后,边缘节点对响应做压缩/改写时会依 RFC 把
+// 强 ETag 降级为弱 ETag(W/"...")再下发,客户端原样存下、原样回传。字节强比较下
+// W/"x" != "x" 恒成立,协商缓存彻底失效 —— 每次目录请求都返回 200,而画布把 200
+// 当作「内容变了」(见 src-tauri/src/sync/catalog.rs 的 check_catalog_updates),
+// 于是反复判定「有更新可用」,即使点过应用更新,下一轮轮询又会弹回来。
+func TestGetCatalogETagWeakComparison(t *testing.T) {
+	router := setupCatalogTestDB(t)
+
+	w1 := httptest.NewRecorder()
+	req1, _ := http.NewRequest("GET", "/api/canvas/catalog", nil)
+	router.ServeHTTP(w1, req1)
+	require.Equal(t, http.StatusOK, w1.Code)
+	etag := w1.Header().Get("ETag")
+	require.NotEmpty(t, etag)
+	// 源站产出的是强 ETag;W/ 是中间层加的
+	require.NotContains(t, etag, "W/")
+
+	// 1. 中间层加了 W/ 前缀后原样回传 —— 必须仍判命中
+	w2 := httptest.NewRecorder()
+	req2, _ := http.NewRequest("GET", "/api/canvas/catalog", nil)
+	req2.Header.Set("If-None-Match", "W/"+etag)
+	router.ServeHTTP(w2, req2)
+	assert.Equal(t, http.StatusNotModified, w2.Code)
+
+	// 2. 逗号分隔的多值列表里命中任一个即可
+	w3 := httptest.NewRecorder()
+	req3, _ := http.NewRequest("GET", "/api/canvas/catalog", nil)
+	req3.Header.Set("If-None-Match", `"stale-etag", W/`+etag)
+	router.ServeHTTP(w3, req3)
+	assert.Equal(t, http.StatusNotModified, w3.Code)
+
+	// 3. 通配符 * 表示「只要资源存在就命中」
+	w4 := httptest.NewRecorder()
+	req4, _ := http.NewRequest("GET", "/api/canvas/catalog", nil)
+	req4.Header.Set("If-None-Match", "*")
+	router.ServeHTTP(w4, req4)
+	assert.Equal(t, http.StatusNotModified, w4.Code)
+
+	// 4. 内容真的变了,即使是弱 ETag 也不能再判命中
+	model.DB.Create(&model.CanvasCatalogModel{
+		RemoteID: "weak-cmp-model", DisplayName: "Weak", Capabilities: "video_gen",
+		Enabled: boolPtr(true), Contract: "relay_video_async_v1", RequiresVocab: 1,
+	})
+	w5 := httptest.NewRecorder()
+	req5, _ := http.NewRequest("GET", "/api/canvas/catalog", nil)
+	req5.Header.Set("If-None-Match", "W/"+etag)
+	router.ServeHTTP(w5, req5)
+	assert.Equal(t, http.StatusOK, w5.Code)
+}
+
 func TestGetCatalogWithModels(t *testing.T) {
 	router := setupCatalogTestDB(t)
 

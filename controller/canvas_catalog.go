@@ -410,13 +410,46 @@ func GetCanvasCatalog(c *gin.Context) {
 	// 便于客户端与中间层正确处理协商缓存。
 	c.Header("ETag", etag)
 	c.Header("Cache-Control", "private, no-store")
-	if c.GetHeader("If-None-Match") == etag {
+	// If-None-Match 按 RFC 9110 §13.1.2 用**弱比较** —— 不能按字节比,原因见
+	// etagMatchesWeak 的注释(Cloudflare 会把强 ETag 降级成 W/"...")。
+	if etagMatchesWeak(c.GetHeader("If-None-Match"), etag) {
 		c.Status(http.StatusNotModified)
 		return
 	}
 
 	// 写入的就是参与 etag 计算的那份 body,保证协商缓存与响应内容严格一致
 	c.Data(http.StatusOK, "application/json; charset=utf-8", bodyBytes)
+}
+
+// etagMatchesWeak 按 RFC 9110 §13.1.2 的**弱比较**语义判定 If-None-Match 是否命中:
+// 比较前两侧都去掉 W/ 前缀,并允许逗号分隔的多值列表与通配符 *。
+//
+// 为什么必须弱比较(这里踩过坑):本服务挂在 Cloudflare 后,边缘节点对响应做压缩/
+// 改写时会依 RFC 把强 ETag 降级成弱 ETag(W/"...")再下发。客户端按规范原样存下、
+// 原样回传,而 W/"x" != "x" 在字节比较下恒成立 —— 协商缓存彻底失效,每次目录请求
+// 都返回 200。画布把「200」当作「内容变了」(src-tauri/src/sync/catalog.rs 的
+// check_catalog_updates 只看状态码,不看内容),结果就是反复弹「有更新可用」,
+// 连点过应用更新之后,下一轮轮询也会把它弹回来。所以这一处不能按字节比。
+func etagMatchesWeak(ifNoneMatch, etag string) bool {
+	ifNoneMatch = strings.TrimSpace(ifNoneMatch)
+	if ifNoneMatch == "" {
+		return false
+	}
+	// "*" 表示「只要资源存在就命中」
+	if ifNoneMatch == "*" {
+		return true
+	}
+	// 弱前缀 W/ 按 RFC 的 ABNF(%s"W/")是大小写敏感的,不做小写化
+	stripWeak := func(s string) string {
+		return strings.TrimPrefix(strings.TrimSpace(s), "W/")
+	}
+	target := stripWeak(etag)
+	for _, candidate := range strings.Split(ifNoneMatch, ",") {
+		if stripWeak(candidate) == target {
+			return true
+		}
+	}
+	return false
 }
 
 // filterVisibleRemoteIDs 返回该分组可见的 remote_id 子集
