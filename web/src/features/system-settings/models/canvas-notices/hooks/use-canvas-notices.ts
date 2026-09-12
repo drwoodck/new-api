@@ -87,8 +87,8 @@ export function useDeleteCanvasNotice() {
         return
       }
       toast.success(i18next.t('已删除'))
-      // 撤回是软删除：这条仍留在列表里（只是「是否已删除」列变了），
-      // 所以必须重新拉，不能靠本地把它从缓存里摘掉。
+      // 删除是物理删行，这条已经从库里没了 —— 重新拉一次让列表把它摘掉，
+      // 比在本地按 id 过滤缓存更不容易和分页 / 排序规则漂移。
       queryClient.invalidateQueries({ queryKey: ['canvas-notices'] })
     },
     onError: (error: Error) => {

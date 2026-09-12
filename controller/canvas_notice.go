@@ -112,8 +112,12 @@ func MarkCanvasNoticeRead(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	// 已撤回的通知对客户端等同于不存在:撤回后仍允许标记已读,会让
-	// 「列表里已经没有这条了,却还能给它写已读」变成一个可被外部触发的状态。
+	// 归属校验必须与列表口径完全一致(ListCanvasNoticesForGroup),两处不能
+	// 各写一套 —— 否则会留下「列表里已经看不到这条、却还能给它写已读」这种
+	// 可被外部触发的缝。
+	//
+	// IsDeleted 那一半在新代码里恒为假(删除已是物理删行),保留它是为了覆盖
+	// 窗口期:旧实例软删的行,新实例的列表看不到,这里也必须一并拒绝。
 	if notice.IsDeleted() || !notice.TargetsGroup(effectiveGroup) {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "通知不存在"})
 		return

@@ -354,6 +354,7 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	purgeSoftDeletedCanvasNoticesBestEffort()
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err
 	}
@@ -443,6 +444,7 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	purgeSoftDeletedCanvasNoticesBestEffort()
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err
 	}
@@ -460,6 +462,45 @@ func migrateDBFast() error {
 	}
 	common.SysLog("database migrated")
 	return nil
+}
+
+// purgeSoftDeletedCanvasNoticesBestEffort 跑一次历史撤回行的清理,失败只记日志。
+//
+// 清理失败不该让中转站起不来 —— 它删的是残留数据,而撤回行即使留着也仍被
+// ListCanvasNoticesForGroup 的 `deleted_at IS NULL` 挡着不会下发给用户,
+// 最坏的后果只是管理端列表里多几条「看着正常、其实发不出去」的行。
+func purgeSoftDeletedCanvasNoticesBestEffort() {
+	if err := purgeSoftDeletedCanvasNotices(); err != nil {
+		common.SysError("清理历史撤回的画布通知失败(不影响启动): " + err.Error())
+	}
+}
+
+// purgeSoftDeletedCanvasNotices 清掉历史上被「撤回」的通知行,连带它们的已读记录。
+//
+// 画布通知的删除已从「打 deleted_at 标记」改成物理删行,但此前撤回过的行还
+// 留在表里:它们被 ListCanvasNoticesForGroup 的 `deleted_at IS NULL` 挡着不会
+// 下发,可管理端列表(不过滤)会读出来 —— 而前端已经把「撤回」改成「删除」、
+// 去掉了状态列,那些行会显示成一批看起来正常、实际发不出去的通知。
+//
+// 每次启动都跑(收敛式),**不设「跑过就标记」**:覆盖窗口期里旧实例还会写入
+// 新的 deleted_at,一次性标记会让那批行永远留在库里。没有残留时它就是一次
+// 空 DELETE,代价可以忽略。
+//
+// 先删已读再删通知行,与 DeleteCanvasNotice 同一顺序:通知行一旦没了,再想
+// 找出「哪些已读记录属于被删的通知」就只能全表扫。
+func purgeSoftDeletedCanvasNotices() error {
+	// 列不存在就跳过。正常由 AutoMigrate 从结构体建出来,但手工改过库的
+	// 部署不该因为一条清理语句起不来。
+	if !DB.Migrator().HasColumn(&CanvasNotice{}, "deleted_at") {
+		return nil
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		pending := tx.Model(&CanvasNotice{}).Select("id").Where("deleted_at IS NOT NULL")
+		if err := tx.Where("notice_id IN (?)", pending).Delete(&CanvasNoticeRead{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("deleted_at IS NOT NULL").Delete(&CanvasNotice{}).Error
+	})
 }
 
 func migrateLOGDB() error {

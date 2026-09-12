@@ -50,12 +50,13 @@ func normalizeTargetGroups(groups model.CanvasNoticeTargetGroups) model.CanvasNo
 	return out
 }
 
-// GetCanvasNoticesAdmin 列出全部通知,**含已撤回的**。
+// GetCanvasNoticesAdmin 列出全部通知。
 //
-// 与画布端 ListCanvasNoticesForGroup 的差别只在这一个过滤条件上:前端要用
-// deleted_at 渲染「是否已删除」列,撤回过的行留在列表里管理员才能回答
-// 「这条是不是发过、什么时候撤的」。行里直接带 target_groups 数组(自定义
-// 类型的 json tag 就是数组形态),前端不需要再解析一次 JSON 字符串。
+// 与画布端 ListCanvasNoticesForGroup 的差别只在这一个过滤条件上 —— 这里
+// 不过滤 deleted_at,读出来的是「库里真实存在的通知」。删除已是物理删行,
+// 正常情况下两个列表内容一致;残留的历史撤回行由启动时的清理函数收敛掉。
+// 行里直接带 target_groups 数组(自定义类型的 json tag 就是数组形态),
+// 前端不需要再解析一次 JSON 字符串。
 func GetCanvasNoticesAdmin(c *gin.Context) {
 	rows, err := model.ListAllCanvasNotices()
 	if err != nil {
@@ -96,9 +97,12 @@ func SaveCanvasNoticeAdmin(c *gin.Context) {
 	if req.Id == 0 {
 		notice.CreatedBy = c.GetString("username")
 	} else {
-		// 更新前先确认这条存在且没被撤回:对已撤回的通知保存会「成功但
-		// 什么都不发生」(撤回标记仍在,画布端依旧看不到),是个看起来
-		// 正常、实际静默失效的接口行为,不如直接报错。
+		// 更新前先确认这条存在:对一条已经不存在的通知保存会「成功但什么都
+		// 不发生」—— 是个看起来正常、实际静默失效的接口行为,不如直接报错。
+		//
+		// IsDeleted 那一支在新代码里不会命中(删除已是物理删行),留着是为了
+		// 覆盖窗口期:旧实例软删的行在新实例眼里仍是「已删除」,编辑它同样是
+		// 静默失效,该拒。
 		existing, err := model.GetCanvasNoticeById(req.Id)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -121,11 +125,13 @@ func SaveCanvasNoticeAdmin(c *gin.Context) {
 	common.ApiSuccess(c, notice)
 }
 
-// DeleteCanvasNoticeAdmin 撤回一条通知,并连带清掉它的已读记录。
+// DeleteCanvasNoticeAdmin 删除一条通知,并连带清掉它的已读记录。
 //
-// 「撤回」而不是物理删除:通知行本身留着(前端「是否已删除」列要用),
-// 已读记录则物理删掉 —— 它们只在通知还发着时有意义。两步在 model 层同一
-// 事务里完成。
+// 是**物理删除**:返回 200 时这条通知已经不在库里,管理端列表里不会再出现
+// 它。两步(删已读、删通知行)在 model 层同一事务里完成,细节见
+// model.DeleteCanvasNotice。
+//
+// 删一条不存在的、或重复删同一条,返回 404 而不是静默成功。
 func DeleteCanvasNoticeAdmin(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {

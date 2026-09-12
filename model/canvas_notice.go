@@ -93,12 +93,19 @@ type CanvasNotice struct {
 	// CreatedBy 存管理员用户名而不是 id:这张表是运维留痕用的,用户名比一个
 	// 查不到人的数字 id 有用,管理员改名或删号也不会让这行读不出来。
 	CreatedBy string `gorm:"type:varchar(255)" json:"created_by"`
-	// DeletedAt 是撤回时间,nil = 未撤回。
+	// DeletedAt 是**历史遗留列**,新代码不再写入它(删除已改成物理删行)。
+	//
+	// 为什么留着这一列而不是 DropColumn 丢掉:
+	//   - 它是下面 `deleted_at IS NULL` 过滤条件的存在前提。丢列就必须同时
+	//     去掉过滤,而过滤是「清行失败时撤回内容不外泄」的唯一兜底 ——
+	//     为纯装饰性的 schema 整洁换一条数据泄漏路径不划算。
+	//   - 覆盖窗口期(旧二进制还在跑)里旧实例仍会写它,过滤能把那些行挡住。
+	//   - 去掉结构体字段还会让**全新部署**建表时没有这一列,届时查询里的
+	//     `deleted_at IS NULL` 直接变成 SQL 错误,每次拉取通知都失败。
 	//
 	// 用显式可空时间列,而不是 GORM 的 gorm.DeletedAt:后者的 Delete() 会静默
-	// 变成软删除,且所有查询自动追加 deleted_at IS NULL —— 而管理端**要**看
-	// 含已撤回的完整列表(前端「是否已删除」列),那层隐式过滤反而得处处
-	// Unscoped 绕开。这里把语义写明白:画布侧查询显式过滤,管理端不过滤。
+	// 变成软删除、所有查询自动追加 deleted_at IS NULL,而管理端要看完整列表,
+	// 那层隐式过滤反而得处处 Unscoped 绕开。
 	DeletedAt *time.Time `json:"deleted_at"`
 	CreatedAt time.Time  `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt time.Time  `gorm:"autoUpdateTime" json:"updated_at"`
@@ -108,7 +115,11 @@ func (CanvasNotice) TableName() string {
 	return "canvas_notices"
 }
 
-// IsDeleted 表示这条通知已被管理员撤回(画布端不再下发、管理端仍可见)。
+// IsDeleted 表示这条通知带着历史撤回标记。
+//
+// 新代码不会产生这样的行(删除已是物理删行),它只在**覆盖窗口**里有意义:
+// 旧实例软删的行在新实例眼里仍是「已撤回」,于是列表过滤与已读归属校验
+// 两处口径继续一致 —— 否则会出现「列表里看不到、却还能标记已读」的缝。
 func (n *CanvasNotice) IsDeleted() bool {
 	return n.DeletedAt != nil
 }
@@ -149,7 +160,7 @@ func (CanvasNoticeRead) TableName() string {
 	return "canvas_notice_reads"
 }
 
-// ListCanvasNoticesForGroup 返回发给该分组的未撤回通知,按发布时间倒序。
+// ListCanvasNoticesForGroup 返回发给该分组的通知,按发布时间倒序。
 //
 // 分组匹配在应用层做,不在 SQL 里 —— target_groups 是 JSON 文本,而
 // MySQL / SQLite / PostgreSQL 的 JSON 函数语法各不相同(JSON_CONTAINS /
@@ -159,6 +170,11 @@ func (CanvasNoticeRead) TableName() string {
 //
 // 排序带 id 兜底:同一秒创建的两条通知只按 created_at 排会得到不稳定的
 // 顺序,客户端下拉列表会在两次拉取之间自己换位置。
+//
+// `deleted_at IS NULL` 保留着,哪怕新代码已经不会再写入那一列:它既是
+// 覆盖窗口期(旧二进制软删、新二进制读取)唯一挡住撤回内容的过滤,也是
+// 启动清理万一失败时的兜底。多一个恒真的条件,换「撤回过的通知绝不会
+// 重新下发」这条硬保证。
 func ListCanvasNoticesForGroup(group string) ([]CanvasNotice, error) {
 	var rows []CanvasNotice
 	if err := DB.Where("deleted_at IS NULL").
@@ -205,7 +221,7 @@ func MarkCanvasNoticeRead(noticeId, userId int) error {
 	return DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&read).Error
 }
 
-// GetCanvasNoticeById 按 id 取一条(含已撤回),不存在返回 gorm.ErrRecordNotFound。
+// GetCanvasNoticeById 按 id 取一条,不存在返回 gorm.ErrRecordNotFound。
 func GetCanvasNoticeById(id int) (*CanvasNotice, error) {
 	var notice CanvasNotice
 	if err := DB.First(&notice, id).Error; err != nil {
@@ -214,10 +230,11 @@ func GetCanvasNoticeById(id int) (*CanvasNotice, error) {
 	return &notice, nil
 }
 
-// ListAllCanvasNotices 返回全部通知(含已撤回),按发布时间倒序。
+// ListAllCanvasNotices 返回全部通知,按发布时间倒序。
 //
-// 管理端列表刻意不过滤 deleted_at:前端要渲染「是否已删除」列,撤回过的
-// 通知留在列表里,管理员才能回答「这条是不是发过、什么时候撤的」。
+// 不过滤 deleted_at:管理端列表的语义是「库里真实存在的通知」。撤回过的
+// 历史行由 main.go 的 purgeSoftDeletedCanvasNotices 在每次启动时清掉;
+// 在那之前它们被上面的过滤挡着不会下发,这里读出来只是覆盖窗口里的短暂状态。
 func ListAllCanvasNotices() ([]CanvasNotice, error) {
 	// 初始化成非 nil 空切片:没有通知时 GORM 会把 nil 原样留在变量里,
 	// 序列化出去就是 data: null 而不是 [] —— 前端能靠 ?? [] 兜住,但
@@ -239,7 +256,8 @@ func SaveCanvasNotice(notice *CanvasNotice) error {
 		return err
 	}
 	// 显式列出可改的列:created_at / created_by / deleted_at 都不在其中 ——
-	// 「谁在什么时候发的」和「撤回时间」不该被一次正文编辑改写。
+	// 「谁在什么时候发的」不该被一次正文编辑改写;deleted_at 同理,一次编辑
+	// 不该让覆盖窗口里已撤回的行重新下发给用户。
 	//
 	// 用 map 而不是结构体做 Updates:GORM 对结构体的零值字段是「跳过」语义,
 	// 而把内容改成空串、把目标分组清空都是合法编辑,用结构体会静默不生效。
@@ -252,28 +270,31 @@ func SaveCanvasNotice(notice *CanvasNotice) error {
 	}).Error
 }
 
-// DeleteCanvasNotice 撤回一条通知:打上撤回时间,并清掉它的已读记录。
+// DeleteCanvasNotice 删除一条通知,连带清掉它的已读记录。
 //
-// 已读记录直接物理删除而不跟着标撤回时间:它们只在「这条通知还发着」时有
-// 意义,留着既没有查询会读、又会让这张随通知数增长的表无限涨。
+// 是**物理删除**而不是打撤回标记:调用返回后这条通知就不存在了,管理端
+// 列表里不会再出现它,也不存在「删了但还在」的中间态。
 //
-// 两步必须同一个事务 —— 漏了标记撤回,用户会看见一条已清空已读的旧通知
-// 重新变成未读;漏了删已读,同 id 复用时会出现一批「凭空已读」。
+// 已读记录必须先删:它们是 (notice_id, user_id) 行,通知行一没,这些行
+// 既没有查询会读、又永远等不到清理,只会让这张随通知数增长的表白涨。
 //
-// 对已撤回的通知重复调用是幂等的(不刷新首次撤回时间,已读记录清一次)。
+// 两步必须同一个事务 —— 漏了删已读,同 id 复用时会出现一批「凭空已读」;
+// 反过来漏了删通知行,用户会看到一条已清空已读的旧通知重新变成未读。
+//
+// 行不存在时由 tx.First 返回 gorm.ErrRecordNotFound,controller 转 404:
+// 重复删同一条会得到「通知不存在」而不是静默成功 —— 这正是管理端想要的,
+// 「我删的这条已经没了」应当被看见。
 func DeleteCanvasNotice(id int) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var notice CanvasNotice
 		if err := tx.First(&notice, id).Error; err != nil {
 			return err
 		}
-		if notice.DeletedAt == nil {
-			now := time.Now()
-			if err := tx.Model(&CanvasNotice{}).Where("id = ?", id).
-				Update("deleted_at", now).Error; err != nil {
-				return err
-			}
+		if err := tx.Where("notice_id = ?", id).Delete(&CanvasNoticeRead{}).Error; err != nil {
+			return err
 		}
-		return tx.Where("notice_id = ?", id).Delete(&CanvasNoticeRead{}).Error
+		// 按主键删整行。CanvasNotice 的 DeletedAt 是普通 *time.Time 而非
+		// gorm.DeletedAt,不实现软删除接口,所以这里是真 DELETE。
+		return tx.Delete(&CanvasNotice{}, id).Error
 	})
 }

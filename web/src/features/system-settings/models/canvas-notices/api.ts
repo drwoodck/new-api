@@ -44,8 +44,6 @@ export interface CanvasNotice {
   target_groups: string[]
   /** 创建该通知的管理员用户名 */
   created_by: string
-  /** null = 未撤回；有值 = 撤回时间。撤回的通知仍留在列表里供留痕 */
-  deleted_at: string | null
   created_at: string
   updated_at: string
 }

@@ -140,27 +140,42 @@ func TestCanvasNoticesEmptyTargetGroupsReachesNobody(t *testing.T) {
 		"取不到分组信息时不下发任何通知")
 }
 
-// TestCanvasNoticesExcludeDeleted 撤回的通知对画布端等同于不存在。
+// TestCanvasNoticesExcludeDeleted 删除的通知对画布端等同于不存在。
 //
-// 撤回必须让通知从列表里消失,并且**不能再被标记已读** —— 否则
+// 删除必须让通知从列表里消失,并且**不能再被标记已读** —— 否则
 // 「列表里已经没有这条,却还能给它写已读」就变成了一个可被外部触发的状态,
-// 已读表会重新长出本该随撤回一起清掉的行。
+// 已读表会重新长出本该随删除一起清掉的行。
+//
+// 这里顺带钉住「删除 = 物理删行」:通知行与它的已读记录都从库里消失,
+// 而不是留一行带 deleted_at 标记的壳。早先的实现是后者,结果是管理端列表
+// 里堆积一批「看着正常、其实发不出去」的行。
 func TestCanvasNoticesExcludeDeleted(t *testing.T) {
 	router := setupCanvasNoticeTestDB(t, "vip", 7)
 
 	notice := &model.CanvasNotice{
-		Title: "要被撤回的通知", Content: "...",
+		Title: "要被删除的通知", Content: "...",
 		Type: model.CanvasNoticeTypeInfo, TargetGroups: model.CanvasNoticeTargetGroups{"vip"},
 		CreatedBy: "admin",
 	}
 	require.NoError(t, model.DB.Create(notice).Error)
 	require.Len(t, listNotices(t, router), 1)
 
+	// 先标一次已读,好验证删除会连它一起清掉
+	require.Equal(t, http.StatusOK, markRead(t, router, notice.Id))
+
 	require.NoError(t, model.DeleteCanvasNotice(notice.Id))
 
-	assert.Empty(t, listNotices(t, router), "已撤回的通知不再下发")
+	assert.Empty(t, listNotices(t, router), "已删除的通知不再下发")
 	assert.Equal(t, http.StatusNotFound, markRead(t, router, notice.Id),
-		"已撤回的通知不能再被标记已读")
+		"已删除的通知不能再被标记已读")
+
+	var rows []model.CanvasNotice
+	require.NoError(t, model.DB.Where("id = ?", notice.Id).Find(&rows).Error)
+	assert.Empty(t, rows, "删除必须是物理删行,库里不该再留下这条")
+
+	var reads []model.CanvasNoticeRead
+	require.NoError(t, model.DB.Where("notice_id = ?", notice.Id).Find(&reads).Error)
+	assert.Empty(t, reads, "已读记录应随通知一起清掉")
 }
 
 // TestMarkCanvasNoticeReadIsIdempotent 标记已读必须幂等:标两次不报错,
@@ -289,7 +304,7 @@ func setupCanvasNoticeAdminTestDB(t *testing.T) *gin.Engine {
 	return router
 }
 
-// TestCanvasNoticesAdminRoundTrip 管理端「新建 → 列表 → 撤回」的完整往返,
+// TestCanvasNoticesAdminRoundTrip 管理端「新建 → 列表 → 删除」的完整往返,
 // 并顺带锁住 target_groups 的三种形态转换。
 //
 // 这条最值得测的原因是它的失败是**静默**的:请求里是数组、库里是 JSON 文本、
@@ -324,7 +339,7 @@ func TestCanvasNoticesAdminRoundTrip(t *testing.T) {
 
 	noticeId := created.Data.Id
 
-	// (2) 列表:target_groups 必须是数组(不是 JSON 字符串),已撤回的也在
+	// (2) 列表:target_groups 必须是数组(不是 JSON 字符串)
 	w = httptest.NewRecorder()
 	req, _ = http.NewRequest(http.MethodGet, "/api/canvas/admin/notices", nil)
 	router.ServeHTTP(w, req)
@@ -341,19 +356,28 @@ func TestCanvasNoticesAdminRoundTrip(t *testing.T) {
 	// 是靠结构体标签兜住的,直接看字节才能证明线上形状确实是数组。
 	assert.Contains(t, w.Body.String(), `"target_groups":["default","vip"]`)
 
-	// (3) 撤回:行仍在列表里(前端「是否已删除」列要用),但画布端再也拉不到
+	// (3) 删除:行从管理端列表里彻底消失(物理删行,不是打标记)
 	w = httptest.NewRecorder()
 	req, _ = http.NewRequest(http.MethodDelete,
 		fmt.Sprintf("/api/canvas/admin/notices/%d", noticeId), nil)
 	router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
+	listed = canvasNoticesAdminResponse{} // 复用同一变量,先清空再解,免得读串
 	w = httptest.NewRecorder()
 	req, _ = http.NewRequest(http.MethodGet, "/api/canvas/admin/notices", nil)
 	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listed))
-	require.Len(t, listed.Data, 1, "撤回过的通知仍留在管理端列表里")
-	assert.True(t, listed.Data[0].IsDeleted(), "撤回后 deleted_at 应有值")
+	assert.Empty(t, listed.Data, "删除后管理端列表里不该再有这条")
+
+	// 再删一次应当是 404 而不是静默成功 —— 「我删的这条已经没了」要被看见,
+	// 否则管理端连着点两次会以为第二次也删掉了什么。
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest(http.MethodDelete,
+		fmt.Sprintf("/api/canvas/admin/notices/%d", noticeId), nil)
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code, "重复删除同一条应返回 404")
 }
 
 // TestCanvasNoticesAdminEmptyListIsArray 一条通知都没有时,data 必须是 []

@@ -24,7 +24,6 @@ import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { StaticDataTable } from '@/components/data-table/static/static-data-table'
 import { GroupBadge } from '@/components/group-badge'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -59,8 +58,8 @@ type NoticeDraft = {
  *
  * 「一个分组都不选」= 谁都不发，不是全站广播 —— 后端刻意这么判，这里的
  * 表单也照同样的口径提示，免得管理员以为留空就是群发（见 model/canvas_notice.go
- * 的 TargetsGroup）。已撤回的通知仍留在列表里（「状态」列会标出来），
- * 才能回答「这条发过没有、什么时候撤的」。
+ * 的 TargetsGroup）。删除是**物理删除**：删完这条就从列表里消失，没有
+ * 「已撤回」这种中间态，所以这里也没有状态列。
  */
 export function CanvasNoticesPanel() {
   const { t } = useTranslation()
@@ -205,30 +204,15 @@ export function CanvasNoticesPanel() {
                 : '-',
           },
           {
-            id: 'status',
-            header: t('状态'),
-            defaultWidth: 110,
-            cell: (row) => {
-              if (row.deleted_at) {
-                return <Badge variant='secondary'>{t('已撤回')}</Badge>
-              }
-              return <Badge variant='default'>{t('已发布')}</Badge>
-            },
-          },
-          {
             id: 'actions',
             header: t(''),
             defaultWidth: 180,
             cell: (row) => (
               <div className='flex items-center gap-1'>
-                {/* 已撤回的不给编辑：后端也会拒（返回「该通知已删除,不能编辑」），
-                    但那是错一次才知道；这里直接把入口关掉。撤回同理 ——
-                    撤两次没有意义。 */}
                 <Button
                   type='button'
                   variant='ghost'
                   size='sm'
-                  disabled={!!row.deleted_at}
                   onClick={() => startEdit(row)}
                 >
                   <Pencil data-icon='inline-start' />
@@ -238,11 +222,10 @@ export function CanvasNoticesPanel() {
                   type='button'
                   variant='ghost'
                   size='sm'
-                  disabled={!!row.deleted_at}
                   onClick={() => setDeleteTarget(row)}
                 >
                   <Trash2 data-icon='inline-start' />
-                  {t('撤回')}
+                  {t('删除')}
                 </Button>
               </div>
             ),
@@ -353,12 +336,12 @@ export function CanvasNoticesPanel() {
       <ConfirmDialog
         open={!!deleteTarget}
         onOpenChange={(open) => !open && setDeleteTarget(null)}
-        title={t('撤回通知')}
+        title={t('删除通知')}
         desc={t(
-          '确定撤回 "{{title}}" 吗?撤回后画布客户端将不再拉到这条通知,它的已读记录也会一并清掉。记录仍留在本列表里备查。',
+          '确定删除 "{{title}}" 吗?删除后画布客户端不会再拉到这条通知,它的已读记录也会一并清掉,这条记录也不再出现在本列表里。删除无法撤销。',
           { title: deleteTarget?.title || '' }
         )}
-        confirmText={t('撤回')}
+        confirmText={t('删除')}
         destructive
         handleConfirm={handleDeleteConfirm}
         isLoading={deleteNotice.isPending}
