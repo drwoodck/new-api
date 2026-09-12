@@ -50,7 +50,14 @@ export async function getModelMetadata(
 ): Promise<ApiResponse<ModelMetadataRow>> {
   const res = await api.get('/api/canvas/admin/model-metadata/detail', {
     params: { model_name: modelName },
-  })
+    // 「记录不存在」这条路上是**正常**的,不是错误:参数表列的是并集,目录里
+    // 已配置完成但还没配 param_schema 的模型也在列,点编辑就是「首次创建」
+    // (保存走 UpsertModelMetadata,行不存在照样成功)。
+    // 不加这个标记的话,全局响应拦截器(http-client.ts 的 skipBusinessError
+    // 分支)会把后端那句 record not found 弹成红色错误提示 —— 而这条路其实
+    // 完全可用,提示是纯误导。同类先例见 features/wallet/api.ts 的 calculateAmount。
+    skipBusinessError: true,
+  } as Record<string, unknown>)
   return res.data
 }
 

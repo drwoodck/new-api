@@ -33,6 +33,10 @@ import {
 
 import { SettingsSection } from '../../components/settings-section'
 import { CanvasNoticesPanel } from '../canvas-notices/canvas-notices-panel'
+import {
+  isMetadataConfigured,
+  useModelMetadataRows,
+} from '../model-metadata/hooks/use-metadata-rows'
 import { ModelMetadataPanel } from '../model-metadata/model-metadata-panel'
 import { getCanvasCatalogModel } from './api'
 import { CanvasCatalogFormDialog } from './components/canvas-catalog-form-dialog'
@@ -159,6 +163,24 @@ export function CanvasCatalogSection() {
     }
     return { configured: configuredRows, unconfigured: unconfiguredRows }
   }, [overviewRows])
+
+  // 参数表页签的计数。口径是**参数表语境**的「配没配 param_schema」,不是
+  // 目录的 ready —— 目录 ready 决定模型能不能被画布选中,param_schema 决定
+  // 选中后有哪些参数可调,是独立的两件事。标题里的数字必须和参数表「状态」
+  // 列数出来的完全一致,否则看的人会以为哪里对不上。
+  //
+  // 与列表同源(useModelMetadataRows),react-query 同 key 不会多发一次请求。
+  const { rows: metadataRows } = useModelMetadataRows()
+  const metadataCounts = useMemo(() => {
+    let configuredCount = 0
+    for (const row of metadataRows) {
+      if (isMetadataConfigured(row)) configuredCount++
+    }
+    return {
+      configured: configuredCount,
+      unconfigured: metadataRows.length - configuredCount,
+    }
+  }, [metadataRows])
 
   // 两个页签各用各的搜索词 —— 它们看的是两批不相干的模型,共用一份查询
   // 会让「切过去发现上一条搜索还生效」变成常态。
@@ -317,7 +339,10 @@ export function CanvasCatalogSection() {
             {/* 参数表与目录是一件事的两面：目录决定模型能不能被选中,
                 参数表决定选中后有哪些参数可调。放同一个分区里,配模型时
                 不必在两个菜单之间来回跳。 */}
-            <TabsTrigger value='metadata'>{t('模型参数表')}</TabsTrigger>
+            <TabsTrigger value='metadata'>
+              {t('模型参数表')} ({t('已配置')} {metadataCounts.configured} ·{' '}
+              {t('未配置')} {metadataCounts.unconfigured})
+            </TabsTrigger>
             {/* 分组通知跟目录/参数表都不是一回事:它不发模型,只给用户发消息。
                 放同一页是因为入口位置就这么定的 —— 配画布相关的东西集中在一处。 */}
             <TabsTrigger value='notices'>{t('画布通知')}</TabsTrigger>

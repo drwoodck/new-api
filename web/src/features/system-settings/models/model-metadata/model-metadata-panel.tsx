@@ -43,9 +43,12 @@ import { useCanvasCatalogOverview } from '../canvas-catalog/hooks/use-canvas-cat
 import type { CanvasCatalogOverviewRow } from '../canvas-catalog/types'
 import {
   useModelMetadataDetail,
-  useModelMetadataList,
   useUpdateModelMetadata,
 } from './hooks/use-model-metadata'
+import {
+  isMetadataConfigured,
+  useModelMetadataRows,
+} from './hooks/use-metadata-rows'
 
 const SCHEMA_PLACEHOLDER = `{
   "prompt":     {"type": "string", "required": true, "isPrompt": true},
@@ -96,7 +99,10 @@ function parseMediaConfig(raw?: string): FlatMedia | null {
  */
 export function ModelMetadataPanel() {
   const { t } = useTranslation()
-  const { data: rows = [], isLoading } = useModelMetadataList()
+  // 行 = 已有参数表记录 ∪ 目录里已配置完成的模型。模型上新时不必先去
+  // 「已配置完成」页查到它叫什么、再回这里手敲一遍。
+  // 计数与列表读同一份,所以页签标题的数字和表格里数得出来的必然一致。
+  const { rows, isLoading } = useModelMetadataRows()
   const updateMutation = useUpdateModelMetadata()
 
   // 显示名 / 模型说明 / 启用分组三列的数据源:与「已配置完成」页同一份
@@ -290,15 +296,9 @@ export function ModelMetadataPanel() {
             defaultWidth: 110,
             cell: (row) => (
               <Badge
-                variant={
-                  row.param_schema && row.param_schema.trim() !== ''
-                    ? 'default'
-                    : 'secondary'
-                }
+                variant={isMetadataConfigured(row) ? 'default' : 'secondary'}
               >
-                {row.param_schema && row.param_schema.trim() !== ''
-                  ? t('已配置')
-                  : t('未配置')}
+                {isMetadataConfigured(row) ? t('已配置') : t('未配置')}
               </Badge>
             ),
           },
