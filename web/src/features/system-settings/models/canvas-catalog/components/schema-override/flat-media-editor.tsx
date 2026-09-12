@@ -26,6 +26,23 @@ import { defaultFlatMedia } from './codec'
 import { FieldRow, KindSelect, TextField } from './field-primitives'
 import { FLAT_MEDIA_WRAPS, type FlatMedia, type FlatMediaWrap } from './types'
 
+// 下拉**列表里**显示的名字。以前列表直接显示 url_string_or_array 这类变体名,
+// 管理员得先选中、看到下面的提示,才知道选错了没有 —— 从下拉里根本挑不动。
+// 这里把「这个形态到底是什么形状」提到列表项上,选择动作才成立。
+const WRAP_LABELS: Record<FlatMediaWrap, string> = {
+  url_string: '单个字符串 —— 一次只能带一个媒体',
+  url_array: '字符串数组 —— 一个字段装多个媒体',
+  url_string_or_array: '字符串或数组 —— 一个用字符串、多个用数组（拿不准选这个）',
+  object_array: '对象数组 —— 每个媒体是一个对象，URL 键名要另外填',
+  pipe_joined: '竖线拼接 —— 多个 URL 用 | 连成一个字符串',
+  json_array_string: 'JSON 序列化字符串 —— 字段是字符串，内容是数组',
+  vision_array: 'OpenAI vision 风格 —— [{type:"image_url",…}]',
+  base64: 'base64 内嵌 —— 不用 URL，直接把字节编码进请求',
+  form_data_files: '文件上传 —— 走 multipart 字节附件（仅 Multipart 形状生效）',
+  typed_url_arrays: '按类型分桶 —— 图/视频/音频各占一个字段',
+  first_last_or_typed_arrays: '首尾帧 或 按类型分桶 —— 按模式字段自动二选一',
+}
+
 // 与 profile_schema.rs 上每个变体的注释逐一对应,帮助管理员在只有变体名时
 // 分辨该选哪一个 —— 这些字段的差异在没读过 Rust 源码的前提下并不直观。
 const WRAP_HINTS: Record<FlatMediaWrap, string> = {
@@ -73,6 +90,7 @@ export function FlatMediaEditor({
       <KindSelect
         value={value.wrap}
         options={FLAT_MEDIA_WRAPS}
+        labels={WRAP_LABELS}
         onChange={(wrap) => onChange(defaultFlatMedia(wrap))}
       />
       <p className='text-muted-foreground text-xs'>{t(WRAP_HINTS[value.wrap])}</p>

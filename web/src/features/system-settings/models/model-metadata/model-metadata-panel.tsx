@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Pencil, Plus } from 'lucide-react'
+import { ChevronDown, Pencil, Plus } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -26,6 +26,11 @@ import { GroupBadge } from '@/components/group-badge'
 import { JsonCodeEditor } from '@/components/json-code-editor'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { FlatMediaEditor } from '../canvas-catalog/components/schema-override/flat-media-editor'
 import type { FlatMedia } from '../canvas-catalog/components/schema-override/types'
@@ -379,6 +384,102 @@ export function ModelMetadataPanel() {
               {t('取消')}
             </Button>
           </div>
+
+          {/* 使用说明。上面那块把 Rust 端 profile_schema.rs 的协议差异直接摆到了
+              管理员面前 —— 不写清楚就只能靠读源码猜该选哪个。默认展开:第一次配的人
+              一定需要它;配熟了点标题收起,不占地方。 */}
+          <Collapsible defaultOpen className='rounded-lg border'>
+            <CollapsibleTrigger className='hover:bg-muted/50 flex w-full items-center gap-1.5 px-3 py-2 text-left text-sm font-medium'>
+              <ChevronDown data-icon='inline-start' size={14} />
+              {t('参考媒体怎么配（点标题收起）')}
+            </CollapsibleTrigger>
+            <CollapsibleContent className='text-muted-foreground space-y-3 border-t px-3 py-3 text-xs'>
+              <div className='space-y-1'>
+                <p className='text-foreground font-medium'>{t('这一步在配什么')}</p>
+                <p>
+                  {t(
+                    '画布节点上用户挂的参考图/视频/音频，最终要出现在请求体的某个字段里。这里配的就是「放进哪个字段、摆成什么形状」。中转站只做透传，配错上游就收不到素材。'
+                  )}
+                </p>
+              </div>
+
+              <div className='space-y-1'>
+                <p className='text-foreground font-medium'>
+                  {t('形态怎么选 —— 照上游 API 文档的请求示例对号入座')}
+                </p>
+                <ul className='space-y-0.5'>
+                  <li>
+                    {t('文档是')} <code>"image": "https://…"</code> →{' '}
+                    {t('单个字符串')}
+                  </li>
+                  <li>
+                    {t('文档是')} <code>"image": ["https://…", …]</code> →{' '}
+                    {t('字符串数组')}
+                  </li>
+                  <li>
+                    {t('两种都收、或看不出来 →')}{' '}
+                    <span className='text-foreground font-medium'>
+                      {t('字符串或数组')}
+                    </span>
+                    {t('（拿不准就选这个）')}
+                  </li>
+                  <li>
+                    {t('文档是')} <code>[{'{'}"url": "https://…"{'}'}]</code> →{' '}
+                    {t('对象数组（还要填 URL 键名，通常是 url）')}
+                  </li>
+                  <li>
+                    {t('文档是')} <code>"a|b|c"</code> → {t('竖线拼接')}
+                  </li>
+                  <li>
+                    {t('字段是字符串、内容却是数组：')} <code>"[…] "</code> →{' '}
+                    {t('JSON 序列化字符串')}
+                  </li>
+                  <li>
+                    {t('文档是')} <code>[{'{'}"type":"image_url"…{'}'}]</code> →{' '}
+                    {t('OpenAI vision 风格')}
+                  </li>
+                  <li>{t('不传 URL、直接传字节 → base64 内嵌 / 文件上传')}</li>
+                  <li>
+                    {t('referenceImages / referenceVideos / referenceAudios 各占一个字段 →')}{' '}
+                    {t('按类型分桶')}
+                  </li>
+                  <li>
+                    {t('同时有首尾帧与全能参考两套字段 →')}{' '}
+                    {t('首尾帧 或 按类型分桶')}
+                  </li>
+                </ul>
+              </div>
+
+              <div className='space-y-1'>
+                <p className='text-foreground font-medium'>{t('字段名填什么')}</p>
+                <p>
+                  {t(
+                    '逐字照抄上游文档里那个键名 —— 不翻译、不加引号、不改大小写。文档写 "image" 就填 image，写 "referenceImages" 就填 referenceImages。'
+                  )}
+                </p>
+              </div>
+
+              <div className='space-y-1'>
+                <p className='text-foreground font-medium'>
+                  {t('为什么常常只有一个「字段名」')}
+                </p>
+                <p>
+                  {t(
+                    '多数形态里参考图、参考视频、参考音频都塞进同一个字段，所以一个名字就够。选了「按类型分桶」会自动展开成图片/视频/音频三个格子，「首尾帧 或 按类型分桶」展开成七个 —— 那些格子由形态自己带出来，不需要手动增删，所以这里没有「添加」按钮。'
+                  )}
+                </p>
+              </div>
+
+              <div className='space-y-1'>
+                <p className='text-foreground font-medium'>{t('拿不准怎么办')}</p>
+                <p>
+                  {t(
+                    '点右上角「移除」留空。留空 = 沿用契约模板的默认形态，绝大多数中转站模型这样就是对的。'
+                  )}
+                </p>
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
       </div>
     )
   }
