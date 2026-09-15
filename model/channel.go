@@ -579,12 +579,32 @@ func (channel *Channel) Update() error {
 		}
 	}
 	var err error
+	// 渠道启停 → 元信息页模型状态的镜像需要旧值对照:这里取 Updates 之前的落库
+	// status。UpdateChannelStatus/按 tag 启停各有自己的镜像接线,这条兜底覆盖的是
+	// 其余直接改 status 的路径(编辑渠道整体保存等)—— 否则渠道经这些路径恢复启用
+	// 时,已被镜像禁用的模型不会被恢复。读取失败按「状态未变」处理:拿不到旧值
+	// 宁可不动,也不在 DB 异常时用错判据触发级联。
+	prevStatus := channel.Status
+	if channel.Id != 0 {
+		var prev []int
+		if err := DB.Model(&Channel{}).Where("id = ?", channel.Id).
+			Pluck("status", &prev).Error; err == nil && len(prev) > 0 {
+			prevStatus = prev[0]
+		}
+	}
 	err = DB.Model(channel).Updates(channel).Error
 	if err != nil {
 		return err
 	}
 	DB.Model(channel).First(channel, "id = ?", channel.Id)
 	err = channel.UpdateAbilities(nil)
+	if err == nil && channel.Id != 0 && prevStatus != channel.Status {
+		// status 已随 Updates 落库、abilities 已按新状态重建,镜像判据读到的是
+		// 新状态。桥未注册(纯 model 单测)时是空操作。注意对比的是重读后的
+		// channel.Status:Updates(struct) 跳过零值列,status 传 0 时落库值不变,
+		// 此时 prevStatus 与重读值相等,自然不触发。
+		common.ChannelModelsStatusCascade(channel.GetModels())
+	}
 	return err
 }
 

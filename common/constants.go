@@ -158,9 +158,10 @@ var SetChannelMetaEnrichEnabledOption func(enabled bool) = func(bool) {}
 
 // ChannelModelsStatusCascade 是「渠道启停 → 元信息页模型状态镜像」的执行钩子,由
 // service 包在 init 时注册(SyncModelStatusWithChannels 的薄包装)。model 包在渠道
-// **整体**状态发生迁移时(手动/自动启停、按 tag 批量启停)以受影响的模型名集合调用
-// 它 —— 多 key 渠道仅单个 key 被禁时渠道状态未变,不触发。默认空实现:桥未接
-// (纯 model 单测)时是空操作。
+// **整体**状态发生迁移时以受影响的模型名集合调用它,触发点:UpdateChannelStatus
+// (手动/自动启停)、按 tag 批量启停、Channel.Update() 兜底(编辑渠道等直接改
+// status 的路径)—— 多 key 渠道仅单个 key 被禁时渠道状态未变,不触发。默认空实
+// 现:桥未接(纯 model 单测)时是空操作。
 var ChannelModelsStatusCascade func(changedModels []string) = func([]string) {}
 var QuotaRemindThreshold = 1000
 var PreConsumedQuota = 500

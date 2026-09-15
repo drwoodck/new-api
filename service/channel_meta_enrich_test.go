@@ -575,3 +575,38 @@ func TestChannelTagDisableMirrorsModelStatus(t *testing.T) {
 			"tag 内渠道全部停用后 %s 应自动禁用", name)
 	}
 }
+
+// TestChannelUpdateMirrorsStatusChange 钉住 Channel.Update() 的兜底镜像:渠道
+// status 经编辑渠道等直接保存的路径变更时,同样触发镜像并端到端落库(真桥);
+// status 未变的普通编辑(如改名)绝不触发 —— 否则改个备注就会把元信息页整片
+// 翻白。
+func TestChannelUpdateMirrorsStatusChange(t *testing.T) {
+	db := setupChannelStatusMirrorTest(t)
+
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 8541, Type: 1, Name: "mirror-update", Status: 1, Models: "m-upd-a,m-upd-b",
+	}).Error)
+	seedCascadeAbility(t, db, 8541, "m-upd-a")
+	seedCascadeAbility(t, db, 8541, "m-upd-b")
+	for _, name := range []string{"m-upd-a", "m-upd-b"} {
+		require.NoError(t, db.Create(&model.Model{ModelName: name}).Error)
+	}
+
+	// status 未变的编辑:只改名,镜像不得动作。
+	require.NoError(t, (&model.Channel{Id: 8541, Name: "mirror-update-renamed"}).Update())
+	for _, name := range []string{"m-upd-a", "m-upd-b"} {
+		assert.Equal(t, 1, readModelMetaRow(t, db, name).Status, "改名不应影响模型状态(%s)", name)
+	}
+
+	// 编辑渠道整体保存把渠道停用 → 两个模型自动禁用。
+	require.NoError(t, (&model.Channel{Id: 8541, Status: common.ChannelStatusManuallyDisabled}).Update())
+	for _, name := range []string{"m-upd-a", "m-upd-b"} {
+		assert.Equal(t, 0, readModelMetaRow(t, db, name).Status, "渠道经 Update() 停用后 %s 应自动禁用", name)
+	}
+
+	// 同一条路径恢复启用 → 自动恢复。
+	require.NoError(t, (&model.Channel{Id: 8541, Status: common.ChannelStatusEnabled}).Update())
+	for _, name := range []string{"m-upd-a", "m-upd-b"} {
+		assert.Equal(t, 1, readModelMetaRow(t, db, name).Status, "渠道经 Update() 恢复后 %s 应自动启用", name)
+	}
+}
