@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/stretchr/testify/assert"
@@ -437,4 +439,139 @@ func TestCascadeFailsSafeOnQueryError(t *testing.T) {
 	assert.Nil(t, changed)
 	assert.Equal(t, 1, readModelMetaRow(t, db, "cascade-failsafe").Status,
 		"查询失败时一个都不许写 —— 误停是不可逆的对外表现")
+}
+
+// —— 渠道启停 → 状态镜像(经 common.ChannelModelsStatusCascade 桥) ——
+
+// setupChannelStatusMirrorTest 在元信息夹具之上补齐渠道启停链路的前置条件:
+// 关掉记忆缓存(UpdateChannelStatus 缓存分支要 CacheGetChannel,单测没有缓存),
+// 并用计数桥替换 init 注入的真桥 —— 还原时放回去的是真桥本身。
+func setupChannelStatusMirrorTest(t *testing.T) *gorm.DB {
+	t.Helper()
+	db := setupChannelMetaEnrichTest(t)
+
+	prevCache := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() { common.MemoryCacheEnabled = prevCache })
+	return db
+}
+
+// recordCascadeCalls 把桥换成记录器,返回指向调用历史的指针。
+func recordCascadeCalls(t *testing.T) *[][]string {
+	t.Helper()
+	calls := &[][]string{}
+	prev := common.ChannelModelsStatusCascade
+	common.ChannelModelsStatusCascade = func(models []string) {
+		*calls = append(*calls, models)
+	}
+	t.Cleanup(func() { common.ChannelModelsStatusCascade = prev })
+	return calls
+}
+
+// TestChannelStatusCascadeHookOnlyFiresOnChannelLevelChange 钉住桥的触发时机:
+// 渠道整体状态迁移恰好触发一次、参数是渠道全部模型;多 key 渠道仅单个 key 被
+// 禁时渠道状态没变,绝不触发 —— 否则只是抖掉一个坏 key 就会把元信息页整片翻白。
+func TestChannelStatusCascadeHookOnlyFiresOnChannelLevelChange(t *testing.T) {
+	db := setupChannelStatusMirrorTest(t)
+	calls := recordCascadeCalls(t)
+
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 8501, Type: 1, Name: "mirror-hook-single", Status: 1, Models: "m-hook-a,m-hook-b",
+	}).Error)
+	multiKey := &model.Channel{
+		Id: 8502, Type: 1, Name: "mirror-hook-multi", Key: "key-a\nkey-b",
+		Status: 1, Models: "m-hook-multi",
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 2,
+			MultiKeyMode: constant.MultiKeyModePolling,
+		},
+	}
+	require.NoError(t, db.Create(multiKey).Error)
+
+	// 单 key 渠道整体禁用 → 触发一次,参数是渠道全部模型。
+	require.True(t, model.UpdateChannelStatus(8501, "", common.ChannelStatusManuallyDisabled, "test"))
+	require.Len(t, *calls, 1)
+	assert.ElementsMatch(t, []string{"m-hook-a", "m-hook-b"}, (*calls)[0])
+
+	// 多 key 渠道仅禁一个 key:changed 仍为 true(key 状态落库了),但渠道级
+	// 状态未迁移,桥不得触发。
+	require.True(t, model.UpdateChannelStatus(8502, "key-a", common.ChannelStatusAutoDisabled, "key rejected"))
+	require.Len(t, *calls, 1, "key 级禁用不许触发镜像")
+
+	// 渠道整体启用回来 → 再触发一次。
+	require.True(t, model.UpdateChannelStatus(8501, "", common.ChannelStatusEnabled, ""))
+	require.Len(t, *calls, 2)
+}
+
+// TestChannelDisableMirrorsModelStatus 渠道停用方向的端到端(真桥):失去全部
+// 启用渠道覆盖的模型自动置禁用,仍被别的启用渠道提供的保持启用。
+func TestChannelDisableMirrorsModelStatus(t *testing.T) {
+	db := setupChannelStatusMirrorTest(t)
+
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 8511, Type: 1, Name: "mirror-disable-a", Status: 1, Models: "m-sole,m-shared",
+	}).Error)
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 8512, Type: 1, Name: "mirror-disable-b", Status: 1, Models: "m-shared",
+	}).Error)
+	seedCascadeAbility(t, db, 8511, "m-sole")
+	seedCascadeAbility(t, db, 8511, "m-shared")
+	seedCascadeAbility(t, db, 8512, "m-shared")
+	require.NoError(t, db.Create(&model.Model{ModelName: "m-sole"}).Error)
+	require.NoError(t, db.Create(&model.Model{ModelName: "m-shared"}).Error)
+
+	require.True(t, model.UpdateChannelStatus(8511, "", common.ChannelStatusManuallyDisabled, "test"))
+
+	assert.Equal(t, 0, readModelMetaRow(t, db, "m-sole").Status, "唯一启用渠道被停用,应自动禁用")
+	assert.Equal(t, 1, readModelMetaRow(t, db, "m-shared").Status, "仍被渠道 B 提供,不得误停")
+}
+
+// TestChannelEnableMirrorsModelStatus 渠道启用方向的端到端(真桥):被禁用的模型
+// 因渠道恢复提供而自动回到启用。渠道为准,与「加回模型自动启用」同一语义。
+func TestChannelEnableMirrorsModelStatus(t *testing.T) {
+	db := setupChannelStatusMirrorTest(t)
+
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 8521, Type: 1, Name: "mirror-enable", Status: 2, Models: "m-revive",
+	}).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group: "default", Model: "m-revive", ChannelId: 8521, Enabled: false,
+	}).Error)
+	// SyncOfficial 必须显式钉 1(Insert 的二段式写回),否则级联把行当 No Sync
+	// 整行跳过,测试红的理由就成了夹具而不是实现。
+	require.NoError(t, (&model.Model{ModelName: "m-revive", Status: 0, SyncOfficial: 1}).Insert())
+	require.Equal(t, 0, readModelMetaRow(t, db, "m-revive").Status, "夹具失败:禁用行没造出来")
+
+	require.True(t, model.UpdateChannelStatus(8521, "", common.ChannelStatusEnabled, ""))
+
+	assert.Equal(t, 1, readModelMetaRow(t, db, "m-revive").Status, "渠道恢复提供,模型应自动启用")
+}
+
+// TestChannelTagDisableMirrorsModelStatus 按标签批量停用的端到端(真桥):镜像
+// 的受影响集合是该 tag 下全部渠道模型的并集(去重)。
+func TestChannelTagDisableMirrorsModelStatus(t *testing.T) {
+	db := setupChannelStatusMirrorTest(t)
+
+	tag := "mirror-tag"
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 8531, Type: 1, Name: "mirror-tag-a", Status: 1, Tag: &tag, Models: "m-tag-sole,m-dup",
+	}).Error)
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 8532, Type: 1, Name: "mirror-tag-b", Status: 1, Tag: &tag, Models: "m-tag-other,m-dup",
+	}).Error)
+	seedCascadeAbility(t, db, 8531, "m-tag-sole")
+	seedCascadeAbility(t, db, 8531, "m-dup")
+	seedCascadeAbility(t, db, 8532, "m-tag-other")
+	seedCascadeAbility(t, db, 8532, "m-dup")
+	for _, name := range []string{"m-tag-sole", "m-dup", "m-tag-other"} {
+		require.NoError(t, db.Create(&model.Model{ModelName: name}).Error)
+	}
+
+	require.NoError(t, model.DisableChannelByTag(tag))
+
+	for _, name := range []string{"m-tag-sole", "m-dup", "m-tag-other"} {
+		assert.Equal(t, 0, readModelMetaRow(t, db, name).Status,
+			"tag 内渠道全部停用后 %s 应自动禁用", name)
+	}
 }

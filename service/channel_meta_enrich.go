@@ -45,6 +45,20 @@ func IsChannelMetaEnrichEnabled() bool {
 
 func init() {
 	common.SetChannelMetaEnrichEnabledOption = SetChannelMetaEnrichEnabled
+	// 渠道启停 → models.status 镜像的桥(model 层在渠道整体状态迁移后调用,
+	// 见 common.ChannelModelsStatusCascade)。不走 gopool:纯 DB、毫秒级,
+	// 且调用点(model 层 defer)本就不在请求关键路径上。不判 channelMetaEnrich
+	// Enabled 总开关 —— 开关管的是「从上游抓元信息」,状态镜像与渠道模型增删的
+	// 级联一样,是本地 DB 对齐,不受它约束(与已上线的 SyncModelStatusWithChannels
+	// 直调点行为一致)。
+	common.ChannelModelsStatusCascade = func(changedModels []string) {
+		changed, err := SyncModelStatusWithChannels(changedModels)
+		if err != nil {
+			common.SysError(fmt.Sprintf("模型状态随渠道启停同步失败: err=%v", err))
+		} else if len(changed) > 0 {
+			common.SysLog(fmt.Sprintf("模型状态随渠道启停: models=%v", changed))
+		}
+	}
 }
 
 const (

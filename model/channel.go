@@ -755,6 +755,9 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 		}
 	}
 
+	// 渠道级状态迁移涉及的模型集合,在 defer 里转交给元信息页状态镜像。提前声明
+	// 是因为 defer 闭包引用不到后面用 := 声明的 channel 变量(作用域从声明点开始)。
+	var cascadedModels []string
 	shouldUpdateAbilities := false
 	defer func() {
 		if shouldUpdateAbilities {
@@ -770,6 +773,12 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			// 渠道启停的强依赖。
 			if cascadeErr := SoftDisableUncoveredCatalogEntries(); cascadeErr != nil {
 				common.SysLog(fmt.Sprintf("failed to cascade-disable canvas catalog entries: %v", cascadeErr))
+			}
+			// models.status 的镜像同上,也是维护性联动:此时 channels.status 与
+			// abilities.enabled 均已落库,覆盖判定读到的是新状态。桥未注册时是
+			// 空操作,失败只记日志(在桥的实现里),不影响渠道启停本身。
+			if len(cascadedModels) > 0 {
+				common.ChannelModelsStatusCascade(cascadedModels)
 			}
 		}
 	}()
@@ -795,6 +804,7 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			channel.Status = status
 			shouldUpdateAbilities = true
 		}
+		cascadedModels = channel.GetModels()
 		err = channel.saveStatusState()
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
@@ -810,7 +820,14 @@ func EnableChannelByTag(tag string) error {
 		return err
 	}
 	err = UpdateAbilityStatusByTag(tag, true)
-	return err
+	if err != nil {
+		return err
+	}
+	// 渠道级启停同样要镜像 models.status(启用方向 = 渠道为准)。
+	if models := channelModelsByTag(tag); len(models) > 0 {
+		common.ChannelModelsStatusCascade(models)
+	}
+	return nil
 }
 
 func DisableChannelByTag(tag string) error {
@@ -827,7 +844,37 @@ func DisableChannelByTag(tag string) error {
 	if cascadeErr := SoftDisableUncoveredCatalogEntries(); cascadeErr != nil {
 		common.SysLog("failed to cascade-disable canvas catalog entries after tag disable: " + cascadeErr.Error())
 	}
+	// 同上,也镜像 models.status(停用方向:失去全部启用渠道覆盖的模型置禁用)。
+	if models := channelModelsByTag(tag); len(models) > 0 {
+		common.ChannelModelsStatusCascade(models)
+	}
 	return nil
+}
+
+// channelModelsByTag 返回该 tag 下全部渠道的模型并集(去重,保持首次出现次序),
+// 供按标签批量启停后的状态镜像当作受影响集合。查询失败返回 nil(桥是空操作,
+// 不让维护性联动反过来影响启停本身)。
+func channelModelsByTag(tag string) []string {
+	var tagged []Channel
+	if err := DB.Select("models").Where("tag = ?", tag).Find(&tagged).Error; err != nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	models := make([]string, 0, len(tagged))
+	for i := range tagged {
+		for _, name := range tagged[i].GetModels() {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			models = append(models, name)
+		}
+	}
+	return models
 }
 
 func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
