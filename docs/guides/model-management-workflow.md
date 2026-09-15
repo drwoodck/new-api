@@ -23,7 +23,7 @@ mynewapi 中转站的模型管理分为三个核心页面，各司其职：
 
 #### 自动发现
 - 添加渠道后，系统每 10 分钟自动巡检
-- 新模型自动创建到 `models` 表（status=0 停用）
+- 新模型自动创建到 `models` 表（status=1 已启用，与渠道同步）
 - 创建 < 24小时的模型显示 **新** 徽章
 
 #### 手动同步
@@ -142,7 +142,7 @@ canvas_catalog_models
    - 添加新的 API 渠道（如 OpenAI, Anthropic）
 
 2. **等待自动巡检**（10 分钟周期）
-   - 系统自动创建 models 行（status=0）
+   - 系统自动创建 models 行（status=1 已启用，与渠道同步）
    - 系统自动创建 canvas_catalog 行（enabled=false）
 
 3. **配置元信息**（元信息页面）

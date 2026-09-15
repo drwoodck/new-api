@@ -74,6 +74,41 @@ func GetEnabledModels() []string {
 	return models
 }
 
+// GetEnabledModelsAmong 是 GetEnabledModels 的按名收窄版:只回答 names 里的哪些
+// 模型当前仍被至少一个启用渠道提供,返回集合而非切片(调用方只需判断有无)。
+//
+// 判据与 GetEnabledModels 逐字相同,为什么另起一个而不是复用它:
+//
+//  1. **要 error**。GetEnabledModels 把 Pluck 的错误吞掉、失败时返回空切片 —— 它
+//     的调用方都是「拿到空集就什么都不显示」的场景,吞掉是安全的。但状态级联的
+//     调用方反过来:空集意味着「没有任何渠道提供」,会被解读成「该停用」。一次查询
+//     失败就静默把在线的模型全停掉,是不可逆的对外表现。这里必须把错误交出去,
+//     让调用方决定「这次什么都别写」。
+//  2. **要收窄**。级联只关心本次渠道变更涉及的那几个名字,没必要把全表模型名拉回
+//     来再取交集。
+func GetEnabledModelsAmong(names []string) (map[string]struct{}, error) {
+	if len(names) == 0 {
+		return map[string]struct{}{}, nil
+	}
+
+	var models []string
+	err := DB.Table("abilities").
+		Joins("INNER JOIN channels ON abilities.channel_id = channels.id").
+		Where("abilities.enabled = ? AND channels.status = ?", true, 1).
+		Where("abilities.model IN ?", names).
+		Distinct("abilities.model").
+		Pluck("abilities.model", &models).Error
+	if err != nil {
+		return nil, err
+	}
+
+	covered := make(map[string]struct{}, len(models))
+	for _, name := range models {
+		covered[name] = struct{}{}
+	}
+	return covered, nil
+}
+
 func GetAllEnableAbilities() []Ability {
 	var abilities []Ability
 	DB.Find(&abilities, "enabled = ?", true)
@@ -414,10 +449,15 @@ func ensureModelsExist(db *gorm.DB, modelNames map[string]struct{}) error {
 	for _, name := range names {
 		if _, exists := existingMap[name]; !exists {
 			modelsToCreate = append(modelsToCreate, Model{
-				ModelName:    name,
-				Description:  "",
-				Status:       1,
-				SyncOfficial: 0,
+				ModelName:   name,
+				Description: "",
+				Status:      1,
+				// 显式写 1，不靠 default:1 的数据库默认值兜底。该标签只在字段
+				// 为零值时才接管（GORM 会把零值列整个从 INSERT 里省略），所以
+				// 字面写 0 的净效果与写 1 相同 —— 但那是巧合，不是语义，而
+				// sync_official 是「本行是否跟随自动同步」的闸门（元信息富化
+				// 与 status 级联都以它为准），取 0 会让整行被静默跳过。
+				SyncOfficial: 1,
 				NameRule:     NameRuleExact,
 				CreatedTime:  now,
 				UpdatedTime:  now,

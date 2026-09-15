@@ -35,6 +35,7 @@ type UpstreamModelPricing struct {
 	PriceTiers           *types.PriceTierList
 	BillingMode          string
 	BillingExpr          string
+	DisplayName          string
 	Description          string
 	Icon                 string
 	Tags                 string
@@ -59,6 +60,7 @@ type upstreamPricingItem struct {
 	PriceTiers           *types.PriceTierList `json:"price_tiers"`
 	BillingMode          string               `json:"billing_mode"`
 	BillingExpr          string               `json:"billing_expr"`
+	DisplayName          string               `json:"display_name"`
 	Description          string               `json:"description"`
 	Icon                 string               `json:"icon"`
 	Tags                 string               `json:"tags"`
@@ -147,6 +149,7 @@ func FetchUpstreamPricingFromBody(rawBody []byte) (map[string]UpstreamModelPrici
 			PriceTiers:           item.PriceTiers,
 			BillingMode:          item.BillingMode,
 			BillingExpr:          item.BillingExpr,
+			DisplayName:          item.DisplayName,
 			Description:          item.Description,
 			Icon:                 item.Icon,
 			Tags:                 item.Tags,

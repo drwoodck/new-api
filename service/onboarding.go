@@ -242,6 +242,7 @@ type UpstreamPrefetchEntry struct {
 	PriceTiers           *types.PriceTierList `json:"price_tiers"`
 	BillingMode          string               `json:"billing_mode"`
 	BillingExpr          string               `json:"billing_expr"`
+	DisplayName          string               `json:"display_name"`
 	Description          string               `json:"description"`
 	Icon                 string               `json:"icon"`
 	Tags                 string               `json:"tags"`
@@ -353,6 +354,7 @@ func PrefetchUpstreamPricing(ctx context.Context, channelID int, modelNames []st
 			PriceTiers:           item.PriceTiers,
 			BillingMode:          item.BillingMode,
 			BillingExpr:          item.BillingExpr,
+			DisplayName:          item.DisplayName,
 			Description:          item.Description,
 			Icon:                 item.Icon,
 			Tags:                 item.Tags,
@@ -702,6 +704,7 @@ func SyncModelsFromUpstream(ctx context.Context, channelID int, modelNames []str
 			PriceTiers:           item.PriceTiers,
 			BillingMode:          item.BillingMode,
 			BillingExpr:          item.BillingExpr,
+			DisplayName:          item.DisplayName,
 			Description:          item.Description,
 			Icon:                 item.Icon,
 			Tags:                 item.Tags,

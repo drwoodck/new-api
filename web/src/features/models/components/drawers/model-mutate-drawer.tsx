@@ -1958,7 +1958,9 @@ export function ModelMutateDrawer({
                         {t('Official Sync')}
                       </FormLabel>
                       <FormDescription>
-                        {t('Sync this model with official upstream')}
+                        {t(
+                          'Follow the channels: this row status mirrors whether an enabled channel provides the model; a manual disable is not permanent while this is on. Turn it off and automatic sync leaves this row alone.'
+                        )}
                       </FormDescription>
                     </div>
                     <FormControl>

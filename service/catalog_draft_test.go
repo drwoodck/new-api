@@ -1,6 +1,9 @@
 package service
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -35,7 +38,8 @@ func countModelMeta(t *testing.T, modelName string) int64 {
 
 // TestDraftCatalogCreatesEntryAndMetaRow 钉住新模型起草:目录条目创建
 // (enabled=false、display_name=模型名、capabilities=video_gen、contract 由
-// ContractForCapability 推导为 relay_video_async_v1),models 行创建(status=0)。
+// ContractForCapability 推导为 relay_video_async_v1),models 行创建(status=1,
+// 与渠道同步 —— 它此刻确实被一个启用渠道提供着)。
 func TestDraftCatalogCreatesEntryAndMetaRow(t *testing.T) {
 	truncate(t)
 	drafted, err := DraftCatalogEntries(newDraftChannel(1, constant.ChannelTypeSora), []string{"draft-sora-model"})
@@ -54,8 +58,8 @@ func TestDraftCatalogCreatesEntryAndMetaRow(t *testing.T) {
 
 	var meta model.Model
 	require.NoError(t, model.DB.Where("model_name = ?", "draft-sora-model").First(&meta).Error)
-	assert.Equal(t, 0, meta.Status, "起草 meta 行必须 status=0")
-	assert.Equal(t, 1, meta.SyncOfficial)
+	assert.Equal(t, 1, meta.Status, "随渠道新增的模型必须落「已启用」")
+	assert.Equal(t, 1, meta.SyncOfficial, "起草行必须跟随自动同步,否则富化与级联会跳过它")
 	assert.Greater(t, meta.CreatedTime, int64(0), "起草 meta 行必须写 created_time")
 	assert.Equal(t, meta.CreatedTime, meta.UpdatedTime)
 }
@@ -142,4 +146,35 @@ func TestDraftCatalogDisabledByMasterSwitch(t *testing.T) {
 	require.Equal(t, 0, drafted)
 	require.Equal(t, int64(0), countCanvasRemoteID(t, "draft-disabled-model"))
 	require.Equal(t, int64(0), countModelMeta(t, "draft-disabled-model"))
+}
+
+// TestDraftCatalogDoesNotFetchUpstream 钉住起草路径不联网。
+//
+// 这条不是洁癖:起草在渠道巡检里对每个新模型调用一次,联网会让 30 分钟一次的
+// 巡检轻易被上游超时拖垮;而元信息有专门的异步富化链路(EnrichChannelModelMeta),
+// 那边超时只影响显示名,不影响登记。两者失败模式必须解耦。
+//
+// 用请求计数而不是掐时间:计时断言会随机器负载飘,计数是确定的。
+func TestDraftCatalogDoesNotFetchUpstream(t *testing.T) {
+	truncate(t)
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	channel := newDraftChannel(1, constant.ChannelTypeSora)
+	channel.BaseURL = &srv.URL
+
+	drafted, err := DraftCatalogEntries(channel, []string{"draft-offline-model"})
+	require.NoError(t, err)
+	require.Equal(t, 1, drafted)
+	assert.Zero(t, atomic.LoadInt32(&hits), "起草路径不得向渠道 BaseURL 发任何请求")
+
+	var meta model.Model
+	require.NoError(t, model.DB.Where("model_name = ?", "draft-offline-model").First(&meta).Error)
+	assert.Equal(t, 1, meta.Status)
+	assert.Empty(t, meta.DisplayName, "元信息不由起草路径填充,它只登记")
 }

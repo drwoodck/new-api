@@ -552,6 +552,18 @@ func checkAndPersistChannelUpstreamModelUpdates(
 		if err = channel.UpdateAbilities(nil); err != nil {
 			return true, autoAdded, catalogDrafted, err
 		}
+		// 巡检是渠道保存路径(controller/channel.go 的 AddChannel/UpdateChannel)的兜底,
+		// 动作与那两处逐字一致:先同步级联(纯 DB),再异步富化(要网络)。
+		// modelsChanged 为真时 pendingAddModels 必非空 —— 它只在 mergedModels 真的变长
+		// 时才被置真,所以这里传具体集合不会退化成「空 = 该渠道全部」。
+		if statusChanged, syncErr := service.SyncModelStatusWithChannels(
+			mergeModelNames(pendingAddModels, pendingRemoveModels),
+		); syncErr != nil {
+			common.SysError(fmt.Sprintf("模型状态随渠道同步失败: channel_id=%d err=%v", channel.Id, syncErr))
+		} else if len(statusChanged) > 0 {
+			common.SysLog(fmt.Sprintf("模型状态随渠道变更: channel_id=%d models=%v", channel.Id, statusChanged))
+		}
+		service.TriggerChannelMetaEnrichAsync(channel.Id, pendingAddModels)
 	}
 	return modelsChanged, autoAdded, catalogDrafted, nil
 }

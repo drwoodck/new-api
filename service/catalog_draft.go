@@ -1,12 +1,8 @@
 package service
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
-	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -70,8 +66,11 @@ func init() {
 //   - canvas_catalog_models 无 remote_id=模型名 条目(软删除也算存在)→ 创建
 //     起草条目(enabled=false、display_name=模型名、capabilities/contract 按
 //     渠道类型映射推导,未知留空);
-//   - models 表无 model_name=模型名 行(软删除也算存在)→ 创建起草 meta 行
-//     (status=0,停用/起草态,sync_official=1)。
+//   - models 表无 model_name=模型名 行(软删除也算存在)→ 创建 meta 行
+//     (status=1 已启用、sync_official=1 跟随自动同步)。
+//
+// 两行都只是「登记」:models 的显示名/说明由 channel_meta_enrich.go 的富化
+// 异步补齐,本函数不发任何网络请求。
 //
 // 幂等:已存在一律跳过,不覆盖任何既有状态。单模型失败记 log 继续,不阻塞
 // 其它模型;返回实际起草模型数。总开关关闭时直接 (0, nil)。
@@ -103,7 +102,7 @@ func DraftCatalogEntries(channel *model.Channel, addedModels []string) (drafted 
 		}
 		if created {
 			drafted++
-			common.SysLog(fmt.Sprintf("画布目录自动起草成功: channel_id=%d model=%s (已创建models表记录status=0)", channel.Id, name))
+			common.SysLog(fmt.Sprintf("画布目录自动起草成功: channel_id=%d model=%s (已创建models表记录status=1)", channel.Id, name))
 		}
 	}
 	return drafted, nil
@@ -113,33 +112,9 @@ func DraftCatalogEntries(channel *model.Channel, addedModels []string) (drafted 
 // 在同一事务里,失败整体回滚该模型的起草。返回 created 表示本次是否新建了
 // 至少一行(已存在的模型返回 false)。
 //
-// 2026-09-07: 新增自动获取模型元信息功能:
-//   1. 优先从渠道 API (/v1/models) 获取模型描述和能力信息
-//   2. 如果渠道 API 失败,回退到 QuantumNous/new-api 元数据库
-//   3. 上游获取失败不影响创建流程,仅记录日志
+// 本函数只写库、不联网:元信息(显示名/说明/图标/标签/供应商)由
+// EnrichChannelModelMeta 在渠道保存后异步补齐,它的失败模式与本函数无关。
 func draftCatalogEntryForModel(channel *model.Channel, name, capability, contract string) (created bool, err error) {
-	// 先尝试从渠道 API 获取模型信息（在事务外执行，避免长时间锁表）
-	var description string
-	var channelInfo *channelModelInfo
-
-	if channel != nil {
-		channelInfo, _ = fetchChannelModelInfo(channel, name)
-		if channelInfo != nil && channelInfo.Description != "" {
-			description = channelInfo.Description
-			common.SysLog(fmt.Sprintf("Fetched model info from channel API: %s", name))
-		}
-	}
-
-	// 如果渠道 API 未返回描述，尝试从元数据库获取
-	var upstreamInfo *upstreamModelInfo
-	if description == "" {
-		upstreamInfo, _ = fetchUpstreamModelInfo(name)
-		if upstreamInfo != nil && upstreamInfo.Description != "" {
-			description = upstreamInfo.Description
-			common.SysLog(fmt.Sprintf("Fetched model info from metadata database: %s", name))
-		}
-	}
-
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		// 两行同一事务内创建,时间戳取同一次值(其它创建路径均显式设时间戳,
 		// 见 CanvasCatalogModel.Insert / Model.Insert,管理端按此显示创建时间)。
@@ -171,61 +146,19 @@ func draftCatalogEntryForModel(channel *model.Channel, name, capability, contrac
 			created = true
 		}
 		if metaCnt == 0 {
+			// 随渠道新增的模型直接落「已启用」:它此刻确实被一个启用渠道提供着,
+			// 登记成停用与事实相反。Status 与 SyncOfficial 都是非零值,GORM 会
+			// 显式写进 INSERT,不需要 model.Model.Insert 那套二段式写回。
+			// 若将来把 status 改回 0,必须同时恢复二段式写回,否则会被本列的
+			// default:1 顶成 1。
 			meta := &model.Model{
 				ModelName:    name,
-				Status:       0,
+				Status:       1,
 				SyncOfficial: 1,
 				CreatedTime:  now,
 				UpdatedTime:  now,
 			}
-
-			// 自动填充模型元信息（优先使用渠道 API 信息，回退到元数据库）
-			if description != "" {
-				meta.Description = description
-			}
-			if upstreamInfo != nil {
-				if meta.Description == "" && upstreamInfo.Description != "" {
-					meta.Description = upstreamInfo.Description
-				}
-				if upstreamInfo.Icon != "" {
-					meta.Icon = upstreamInfo.Icon
-				}
-				if upstreamInfo.NameRule != 0 {
-					meta.NameRule = upstreamInfo.NameRule
-				}
-				// 如果有 vendor 信息，尝试查找对应的 vendor_id
-				if upstreamInfo.VendorName != "" {
-					var vendor model.Vendor
-					if err := tx.Where("name = ?", upstreamInfo.VendorName).First(&vendor).Error; err == nil {
-						meta.VendorID = vendor.Id
-					}
-				}
-			}
-
 			if err := tx.Create(meta).Error; err != nil {
-				return err
-			}
-			// Status=0 会被 GORM 的 default:1 在 Create 时覆盖为 1,仿
-			// model.Model.Insert 的二段式写回真实值,确保起草态(status=0)生效。
-			updates := map[string]interface{}{
-				"status":        0,
-				"sync_official": 1,
-			}
-			// 保留填充的字段
-			if meta.Description != "" {
-				updates["description"] = meta.Description
-			}
-			if meta.Icon != "" {
-				updates["icon"] = meta.Icon
-			}
-			if meta.NameRule != 0 {
-				updates["name_rule"] = meta.NameRule
-			}
-			if meta.VendorID != 0 {
-				updates["vendor_id"] = meta.VendorID
-			}
-			if err := tx.Model(&model.Model{}).Where("id = ?", meta.Id).
-				Updates(updates).Error; err != nil {
 				return err
 			}
 			created = true
@@ -236,205 +169,4 @@ func draftCatalogEntryForModel(channel *model.Channel, name, capability, contrac
 		return false, err
 	}
 	return created, nil
-}
-
-// upstreamModelInfo 从上游获取的模型元信息
-type upstreamModelInfo struct {
-	ModelName   string `json:"model_name"`
-	Description string `json:"description"`
-	Icon        string `json:"icon"`
-	VendorName  string `json:"vendor_name"`
-	NameRule    int    `json:"name_rule"`
-}
-
-// channelModelInfo 从渠道 API 返回的模型信息（合并自 /api/pricing 和 /api/media-models/catalog）
-type channelModelInfo struct {
-	ModelName   string  `json:"model_name"`
-	Description string  `json:"description"`
-	Icon        string  `json:"icon"`
-	VendorName  string  `json:"vendor_name"`
-	Tags        string  `json:"tags"`
-	ModelRatio  float64 `json:"model_ratio"`
-	ModelPrice  float64 `json:"model_price"`
-}
-
-// fetchChannelModelInfo 从渠道 API 获取单个模型的信息
-// 优先从 /api/pricing 获取（包含描述、图标、供应商等完整信息）
-// 如果失败，尝试从 /api/media-models/catalog 获取（媒体模型目录）
-func fetchChannelModelInfo(channel *model.Channel, modelName string) (*channelModelInfo, error) {
-	if channel == nil {
-		return nil, fmt.Errorf("channel is nil")
-	}
-
-	baseURL := strings.TrimRight(channel.GetBaseURL(), "/")
-
-	// 尝试从 /api/pricing 获取（text/embedding 模型）
-	if info := fetchFromPricingEndpoint(baseURL, channel.Key, modelName); info != nil {
-		return info, nil
-	}
-
-	// 回退：尝试从 /api/media-models/catalog 获取（image/video/audio 模型）
-	if info := fetchFromCatalogEndpoint(baseURL, channel.Key, modelName); info != nil {
-		return info, nil
-	}
-
-	return nil, fmt.Errorf("model %s not found in channel API", modelName)
-}
-
-// fetchFromPricingEndpoint 从 /api/pricing 端点获取模型信息
-func fetchFromPricingEndpoint(baseURL, apiKey, modelName string) *channelModelInfo {
-	pricingURL := fmt.Sprintf("%s/api/pricing", baseURL)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("GET", pricingURL, nil)
-	if err != nil {
-		return nil
-	}
-
-	// 某些渠道的 /api/pricing 可能需要认证
-	if apiKey != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil
-	}
-
-	// 解析 JSON 数组格式（与 service/upstream_pricing.go 的 upstreamPricingItem 对齐）
-	var pricingItems []struct {
-		ModelName   string  `json:"model_name"`
-		Description string  `json:"description"`
-		Icon        string  `json:"icon"`
-		VendorName  string  `json:"vendor_name"`
-		Tags        string  `json:"tags"`
-		ModelRatio  float64 `json:"model_ratio"`
-		ModelPrice  float64 `json:"model_price"`
-	}
-
-	if err := json.Unmarshal(body, &pricingItems); err != nil {
-		return nil
-	}
-
-	// 查找匹配的模型
-	for _, item := range pricingItems {
-		if item.ModelName == modelName {
-			return &channelModelInfo{
-				ModelName:   item.ModelName,
-				Description: item.Description,
-				Icon:        item.Icon,
-				VendorName:  item.VendorName,
-				Tags:        item.Tags,
-				ModelRatio:  item.ModelRatio,
-				ModelPrice:  item.ModelPrice,
-			}
-		}
-	}
-
-	return nil
-}
-
-// fetchFromCatalogEndpoint 从 /api/media-models/catalog 端点获取模型信息
-func fetchFromCatalogEndpoint(baseURL, apiKey, modelName string) *channelModelInfo {
-	catalogURL := fmt.Sprintf("%s/api/media-models/catalog", baseURL)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("GET", catalogURL, nil)
-	if err != nil {
-		return nil
-	}
-
-	if apiKey != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil
-	}
-
-	// 解析 catalog 响应格式（假设与 canvas_catalog_models 类似）
-	var catalogItems []struct {
-		RemoteID    string `json:"remote_id"`
-		DisplayName string `json:"display_name"`
-		Description string `json:"description"`
-		Icon        string `json:"icon"`
-		VendorName  string `json:"vendor_name"`
-	}
-
-	if err := json.Unmarshal(body, &catalogItems); err != nil {
-		return nil
-	}
-
-	// 查找匹配的模型
-	for _, item := range catalogItems {
-		if item.RemoteID == modelName {
-			return &channelModelInfo{
-				ModelName:   item.RemoteID,
-				Description: item.Description,
-				Icon:        item.Icon,
-				VendorName:  item.VendorName,
-			}
-		}
-	}
-
-	return nil
-}
-
-// fetchUpstreamModelInfo 从上游 API 获取单个模型的元信息
-func fetchUpstreamModelInfo(modelName string) (*upstreamModelInfo, error) {
-	// 默认使用中文语言获取元信息
-	locale := "zh"
-	base := common.GetEnvOrDefaultString("SYNC_UPSTREAM_BASE", "https://basellm.github.io/llm-metadata")
-	modelsURL := fmt.Sprintf("%s/api/newapi/%s/models.json", base, locale)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(modelsURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch upstream models: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upstream API returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	var upstreamModels []upstreamModelInfo
-	if err := json.Unmarshal(body, &upstreamModels); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal upstream models: %w", err)
-	}
-
-	// 查找匹配的模型
-	for _, m := range upstreamModels {
-		if m.ModelName == modelName {
-			return &m, nil
-		}
-	}
-
-	return nil, fmt.Errorf("model %s not found in upstream", modelName)
 }

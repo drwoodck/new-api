@@ -150,6 +150,11 @@ var AutomaticEnableChannelEnabled = false
 // CatalogAutoDraftEnabled 选项时经它落盘运行态,避免 model → service 的引用环
 // (service import model,反向会成环)。与 common.TranslateMessage 同款破环桥。
 var SetCatalogAutoDraftEnabledOption func(enabled bool) = func(bool) {}
+
+// SetChannelMetaEnrichEnabledOption 是「渠道元信息自动同步」开关的写入钩子,由
+// service 包在 init 时注册到 service.SetChannelMetaEnrichEnabled。与上面的
+// SetCatalogAutoDraftEnabledOption 同款破环桥,理由相同(model 不能 import service)。
+var SetChannelMetaEnrichEnabledOption func(enabled bool) = func(bool) {}
 var QuotaRemindThreshold = 1000
 var PreConsumedQuota = 500
 

@@ -701,6 +701,42 @@ func AddChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// 渠道落库后立刻把 models.status 对齐到渠道(纯 DB、同步),再异步富化上游元信息。
+	// 两条链路刻意不合并:富化要打上游,它超时或不可达时状态镜像必须照常工作 ——
+	// 而后者根本不需要网络(理由见 service/channel_meta_enrich.go 顶部)。
+	addedModels := make([]string, 0)
+	for i := range channels {
+		addedModels = append(addedModels, channels[i].GetModels()...)
+	}
+	if statusChanged, syncErr := service.SyncModelStatusWithChannels(addedModels); syncErr != nil {
+		common.SysError(fmt.Sprintf("模型状态随渠道同步失败: channel_id 批量新增 err=%v", syncErr))
+	} else if len(statusChanged) > 0 {
+		common.SysLog(fmt.Sprintf("模型状态随渠道变更: models=%v", statusChanged))
+	}
+	// 按 base_url 去重,每个上游只触发一次:PrefetchUpstreamPricing 的缓存 key 含
+	// channel_id(service/onboarding.go:315),逐渠道各触发一次会让 batch 加 N 个 key
+	// 打出 N 个并发外呼;而同一上游拉回的是同一份定价页,富化写的又是全局 models 行
+	// (model_name 唯一),一个上游一次就够。同批渠道的模型列表来自同一个请求体,
+	// 传空 modelNames 让它按该渠道当前 Models 全量富化即可。
+	//
+	// 用渠道**显式填的** base_url 做分组键,不用 GetBaseURL():后者会按渠道类型回退到
+	// 厂商默认域名,用它分组会把不同厂商混成一组,而那个回退正是富化函数明确要挡住的
+	// SSRF 面。没显式配置的渠道直接跳过,连 goroutine 都不必起(富化守卫同样会跳过)。
+	seenUpstreams := make(map[string]struct{}, len(channels))
+	for i := range channels {
+		if channels[i].BaseURL == nil {
+			continue
+		}
+		baseURL := strings.TrimSpace(*channels[i].BaseURL)
+		if baseURL == "" {
+			continue
+		}
+		if _, ok := seenUpstreams[baseURL]; ok {
+			continue
+		}
+		seenUpstreams[baseURL] = struct{}{}
+		service.TriggerChannelMetaEnrichAsync(channels[i].Id, nil)
+	}
 	recordManageAudit(c, "channel.create", map[string]interface{}{
 		"name":  addChannelRequest.Channel.Name,
 		"type":  addChannelRequest.Channel.Type,
@@ -1108,6 +1144,29 @@ func UpdateChannel(c *gin.Context) {
 	}
 	if channel.Key != "" && channel.Key != originChannel.Key {
 		changedFields = append(changedFields, "key")
+	}
+	// 模型列表变了才动状态。判据与上面 changedFields 里的 "models" 逐字同源
+	// (:1097),所以这里重测一次而不是回头扫切片。
+	if channel.Models != originChannel.Models {
+		// 双向增量 —— 两个方向都要。只算「移除集」会让「加回渠道自动启用」失效,
+		// 而那正是这次「渠道为准」要求的核心。
+		newModels := channel.GetModels()
+		oldModels := originChannel.GetModels()
+		statusChanged, syncErr := service.SyncModelStatusWithChannels(mergeModelNames(
+			subtractModelNames(newModels, oldModels),
+			subtractModelNames(oldModels, newModels),
+		))
+		if syncErr != nil {
+			common.SysError(fmt.Sprintf("模型状态随渠道同步失败: channel_id=%d err=%v", channel.Id, syncErr))
+		} else if len(statusChanged) > 0 {
+			common.SysLog(fmt.Sprintf("模型状态随渠道变更: channel_id=%d models=%v", channel.Id, statusChanged))
+		}
+		// 富化只针对本次**新增**的模型:被移除的那些上游或许还有,但本地这几行已不再
+		// 由本渠道提供,给它们填上游显示名没有意义。纯移除(增量集为空)不必外呼。
+		addedModels := subtractModelNames(newModels, oldModels)
+		if len(addedModels) > 0 {
+			service.TriggerChannelMetaEnrichAsync(channel.Id, addedModels)
+		}
 	}
 	recordManageAudit(c, "channel.update", map[string]interface{}{
 		"id":             channel.Id,

@@ -120,7 +120,7 @@
 **路由**: `/models/metadata`  
 **数据源**: models 表  
 **核心功能**:
-1. ✅ **自动添加**: 管理员添加渠道后，DraftCatalogEntries 自动创建 models 行 (status=0)
+1. ✅ **自动添加**: 管理员添加渠道后，DraftCatalogEntries 自动创建 models 行 (status=1 已启用，与渠道同步)
 2. ✅ **新模型标注**: 创建时间 < 24小时的模型显示"新"标记
 3. ✅ **上游同步入口**: 
    - "从上游预填" 按钮 → `/api/onboarding/prefetch?channel_id=X&model_name=Y`
@@ -185,7 +185,7 @@
 
 #### 4.1.2 DraftCatalogEntries 增强
 当前已实现：
-- ✅ 自动创建 models 行 (status=0)
+- ✅ 自动创建 models 行 (status=1 已启用、sync_official=1 跟随自动同步 —— 它此刻确实被一个启用渠道提供着)
 - ✅ 自动创建 canvas_catalog 行 (enabled=false)
 
 需要补充：

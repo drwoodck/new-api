@@ -59,6 +59,7 @@ func InitOptionMap() {
 	common.OptionMap["AutomaticDisableChannelEnabled"] = strconv.FormatBool(common.AutomaticDisableChannelEnabled)
 	common.OptionMap["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.AutomaticEnableChannelEnabled)
 	common.OptionMap["CatalogAutoDraftEnabled"] = "true"
+	common.OptionMap["ChannelMetaEnrichEnabled"] = "true"
 	common.OptionMap["OnboardingIgnoredModels"] = "[]"
 	common.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.LogConsumeEnabled)
 	common.OptionMap["DisplayInCurrencyEnabled"] = strconv.FormatBool(common.DisplayInCurrencyEnabled)
@@ -369,6 +370,9 @@ func updateOptionMap(key string, value string) (err error) {
 		case "CatalogAutoDraftEnabled":
 			// 经 common 破环桥写 service 包内的运行态开关(model 不能 import service)。
 			common.SetCatalogAutoDraftEnabledOption(boolValue)
+		case "ChannelMetaEnrichEnabled":
+			// 同上:经破环桥写 service.SetChannelMetaEnrichEnabled。
+			common.SetChannelMetaEnrichEnabledOption(boolValue)
 		case "LogConsumeEnabled":
 			common.LogConsumeEnabled = boolValue
 		case "DisplayInCurrencyEnabled":
