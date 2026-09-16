@@ -93,6 +93,17 @@ func DeleteCanvasCatalogModel(id int) error {
 	return DB.Delete(&CanvasCatalogModel{}, id).Error
 }
 
+// BatchSetCanvasCatalogEnabled 批量上架/下架目录条目,返回实际更新的行数。
+// 软删除行被 GORM 默认作用域天然排除;id 不存在的行不计入 affected —— 调用方
+// (管理页批量操作)以此回显「勾选了 3 个、实际更新 2 个」这类差异。
+func BatchSetCanvasCatalogEnabled(ids []int, enabled bool) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	res := DB.Model(&CanvasCatalogModel{}).Where("id IN ?", ids).Update("enabled", enabled)
+	return res.RowsAffected, res.Error
+}
+
 // GetCanvasCatalog 返回全部目录行(含禁用),按 SortOrder/DisplayName 排序。
 //
 // 本函数**不做分组过滤**,而且分组过滤不该放在这里。原先的 groupFilter 形参

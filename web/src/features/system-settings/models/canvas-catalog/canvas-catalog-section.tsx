@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useNavigate } from '@tanstack/react-router'
-import { Download, Plus } from 'lucide-react'
+import { Download, Plus, Power, PowerOff, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -51,6 +51,7 @@ import {
 } from './components/table-search-input'
 import { useCanvasCatalogOverview } from './hooks/use-canvas-catalog'
 import {
+  useBatchUpdateCanvasCatalogEnabled,
   useDeleteCanvasCatalogModel,
   useUpdateCanvasCatalogModel,
 } from './hooks/use-canvas-catalog-mutations'
@@ -116,11 +117,17 @@ export function CanvasCatalogSection() {
   const { data: overviewRows = [], isLoading } = useCanvasCatalogOverview()
   const deleteModel = useDeleteCanvasCatalogModel()
   const updateModel = useUpdateCanvasCatalogModel()
+  const batchToggleEnabled = useBatchUpdateCanvasCatalogEnabled()
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   // 正在快捷切换上下架的行:同一时刻只允许一行在途,按钮 pending 期间禁用
   const [togglingId, setTogglingId] = useState<number | null>(null)
+  // 已配置页的批量选择(按 catalog_id)。搜索收窄不改变勾选集合 —— 全选只
+  // 增删当前可见行的 id;批量操作成功后由处理函数清空。
+  const [selectedConfiguredIds, setSelectedConfiguredIds] = useState<number[]>(
+    []
+  )
   const [prefillRemoteId, setPrefillRemoteId] = useState<string | undefined>(
     undefined
   )
@@ -264,6 +271,21 @@ export function CanvasCatalogSection() {
     })
   }
 
+  // 批量上架/下架选中的目录条目。成功后清空选择(invalidate 会刷新 overview,
+  // 状态徽标随之更新);失败提示由 mutation 的 onError 统一给出。
+  const handleBatchToggle = async (enabled: boolean) => {
+    if (selectedConfiguredIds.length === 0) return
+    try {
+      await batchToggleEnabled.mutateAsync({
+        ids: selectedConfiguredIds,
+        enabled,
+      })
+      setSelectedConfiguredIds([])
+    } catch {
+      // 已由 onError 弹 toast
+    }
+  }
+
   // 元信息页的显示名/说明,按模型名索引后交给编辑对话框 —— 新建条目时用它
   // 预填「显示名称」并展示「说明」,数据源就是已经拉好的 overview 行。
   const modelMetaByRemoteId = useMemo(() => {
@@ -378,9 +400,48 @@ export function CanvasCatalogSection() {
             placeholder={t('搜索模型名 / 显示名 / 说明 / 分组')}
             clearLabel={t('清除搜索')}
           />
+          {selectedConfiguredIds.length > 0 && (
+            <div className='flex items-center gap-2'>
+              <span className='text-muted-foreground text-sm'>
+                {t('已选 {{count}} 个模型', {
+                  count: selectedConfiguredIds.length,
+                })}
+              </span>
+              <Button
+                size='sm'
+                variant='outline'
+                disabled={batchToggleEnabled.isPending}
+                onClick={() => handleBatchToggle(true)}
+              >
+                <Power className='mr-1.5 h-3.5 w-3.5' />
+                {t('批量上架')}
+              </Button>
+              <Button
+                size='sm'
+                variant='outline'
+                disabled={batchToggleEnabled.isPending}
+                onClick={() => handleBatchToggle(false)}
+              >
+                <PowerOff className='mr-1.5 h-3.5 w-3.5' />
+                {t('批量下架')}
+              </Button>
+              <Button
+                size='sm'
+                variant='ghost'
+                disabled={batchToggleEnabled.isPending}
+                onClick={() => setSelectedConfiguredIds([])}
+              >
+                <X className='mr-1 h-3.5 w-3.5' />
+                {t('取消选择')}
+              </Button>
+            </div>
+          )}
           <CanvasCatalogOverviewTable
             rows={visibleConfigured}
             mode='configured'
+            selectable
+            selectedIds={selectedConfiguredIds}
+            onSelectedChange={setSelectedConfiguredIds}
             emptyContent={
               configuredQuery.trim() === ''
                 ? t('尚未有画布可用的模型。')

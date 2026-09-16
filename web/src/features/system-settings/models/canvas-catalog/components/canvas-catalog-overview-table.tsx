@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { DollarSign, Pencil, Power, PowerOff, Settings2, Trash2 } from 'lucide-react'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { BadgeCell } from '@/components/data-table/core/badge-cell'
@@ -24,6 +25,7 @@ import { StaticDataTable } from '@/components/data-table/static/static-data-tabl
 import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 
 import type {
   CanvasCatalogOverviewGroupPrice,
@@ -46,6 +48,11 @@ type CanvasCatalogOverviewTableProps = {
   onToggleEnabled?: (row: CanvasCatalogOverviewRow) => void
   // 正在切换的行 catalog_id:pending 期间禁用该行按钮,避免连点打出两次翻转。
   togglingId?: number | null
+  // 批量选择(仅已配置页启用):受控选中集合按 catalog_id 记,行首渲染多选框,
+  // 表头是全选本页(当前可见行)。未传 selectable 时不渲染选择列。
+  selectable?: boolean
+  selectedIds?: number[]
+  onSelectedChange?: (ids: number[]) => void
 }
 
 function formatGroupPrice(t: (key: string) => string, price: number | null) {
@@ -93,6 +100,41 @@ export function CanvasCatalogOverviewTable(
 ) {
   const { t } = useTranslation()
 
+  // 选择列:按 catalog_id 记(已配置页每行必有条目)。全选针对当前可见行,
+  // 搜索收窄后勾选集合保持稳定 —— 全选只增删可见行的 id,不碰不可见的。
+  const selectedSet = useMemo(
+    () => new Set(props.selectedIds ?? []),
+    [props.selectedIds]
+  )
+  const selectableRows = useMemo(
+    () => props.rows.filter((r) => r.catalog_id > 0),
+    [props.rows]
+  )
+  const allSelected =
+    selectableRows.length > 0 &&
+    selectableRows.every((r) => selectedSet.has(r.catalog_id))
+  const toggleAll = () => {
+    if (!props.onSelectedChange) return
+    if (allSelected) {
+      props.onSelectedChange(
+        (props.selectedIds ?? []).filter(
+          (id) => !selectableRows.some((r) => r.catalog_id === id)
+        )
+      )
+    } else {
+      const merged = new Set(props.selectedIds ?? [])
+      for (const r of selectableRows) merged.add(r.catalog_id)
+      props.onSelectedChange([...merged])
+    }
+  }
+  const toggleOne = (row: CanvasCatalogOverviewRow) => {
+    if (!props.onSelectedChange || row.catalog_id <= 0) return
+    const next = new Set(props.selectedIds ?? [])
+    if (next.has(row.catalog_id)) next.delete(row.catalog_id)
+    else next.add(row.catalog_id)
+    props.onSelectedChange([...next])
+  }
+
   return (
     <StaticDataTable
       data={props.rows}
@@ -104,6 +146,28 @@ export function CanvasCatalogOverviewTable(
       resizable
       className='overflow-x-auto'
       columns={[
+        ...(props.selectable
+          ? [
+              {
+                id: 'select',
+                header: (
+                  <Checkbox
+                    checked={allSelected}
+                    onCheckedChange={() => toggleAll()}
+                    aria-label={t('全选当前列表')}
+                  />
+                ),
+                defaultWidth: 44,
+                cell: (r: CanvasCatalogOverviewRow) => (
+                  <Checkbox
+                    checked={selectedSet.has(r.catalog_id)}
+                    onCheckedChange={() => toggleOne(r)}
+                    aria-label={`${t('选择')}${r.model_name}`}
+                  />
+                ),
+              },
+            ]
+          : []),
         {
           id: 'model_name',
           header: t('中转站模型名'),

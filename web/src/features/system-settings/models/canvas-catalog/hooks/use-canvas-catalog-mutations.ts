@@ -21,6 +21,7 @@ import i18next from 'i18next'
 import { toast } from 'sonner'
 
 import {
+  batchUpdateCanvasCatalogEnabled,
   createCanvasCatalogModel,
   updateCanvasCatalogModel,
   deleteCanvasCatalogModel,
@@ -95,6 +96,32 @@ export function useDeleteCanvasCatalogModel() {
     },
     onError: (error: Error) => {
       toast.error(error.message || i18next.t('Failed to delete catalog entry'))
+    },
+  })
+}
+
+export function useBatchUpdateCanvasCatalogEnabled() {
+  const invalidate = useInvalidateOnSuccess()
+
+  return useMutation({
+    mutationFn: ({ ids, enabled }: { ids: number[]; enabled: boolean }) =>
+      batchUpdateCanvasCatalogEnabled(ids, enabled),
+    onSuccess: (res, vars) => {
+      if (res.success) {
+        toast.success(
+          i18next.t(
+            vars.enabled
+              ? '已批量上架所选模型'
+              : '已批量下架所选模型'
+          )
+        )
+        invalidate.onSuccess()
+      } else {
+        toast.error(res.message || i18next.t('批量操作失败'))
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || i18next.t('批量操作失败'))
     },
   })
 }

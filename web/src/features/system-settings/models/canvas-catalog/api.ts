@@ -54,6 +54,21 @@ export async function getCanvasCatalogModel(
   return res.data
 }
 
+/**
+ * 批量上架/下架目录条目。后端以 updated 回显实际更新行数 —— 勾选里混入
+ * 已被删除的条目时,这里会小于 ids.length,前端照实提示即可。
+ */
+export async function batchUpdateCanvasCatalogEnabled(
+  ids: number[],
+  enabled: boolean
+): Promise<ApiResponse<{ updated: number }>> {
+  const res = await api.put('/api/canvas/admin/models/batch-enabled', {
+    ids,
+    enabled,
+  })
+  return res.data
+}
+
 export interface ContractStat {
   contract: string
   supported: number

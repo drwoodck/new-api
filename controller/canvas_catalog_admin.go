@@ -175,6 +175,34 @@ func DeleteCanvasCatalogModelAdmin(c *gin.Context) {
 	common.ApiSuccess(c, nil)
 }
 
+// BatchUpdateCanvasCatalogEnabledAdmin 批量上架/下架目录条目。
+// Enabled 用指针:false 必须与「未提供」区分开 —— 与 CanvasCatalogModel.Enabled
+// 是同一个 GORM 零值坑,裸 bool 会让人传 false 被当成没传。
+func BatchUpdateCanvasCatalogEnabledAdmin(c *gin.Context) {
+	var req struct {
+		IDs     []int `json:"ids"`
+		Enabled *bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if len(req.IDs) == 0 {
+		common.ApiErrorMsg(c, "缺少要更新的目录条目")
+		return
+	}
+	if req.Enabled == nil {
+		common.ApiErrorMsg(c, "缺少 enabled 取值")
+		return
+	}
+	affected, err := model.BatchSetCanvasCatalogEnabled(req.IDs, *req.Enabled)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"updated": affected})
+}
+
 // canvasCatalogOverviewRow 是目录总览视图的一行:一个中转站已启用模型,
 // 关联它(可能没有的)models 行与(可能没有的)canvas_catalog_model 行。
 type canvasCatalogOverviewRow struct {

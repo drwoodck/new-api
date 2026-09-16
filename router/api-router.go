@@ -276,6 +276,7 @@ func SetApiRouter(router *gin.Engine) {
 			canvasAdminRoute.GET("/models/:id", controller.GetCanvasCatalogModelAdmin)
 			canvasAdminRoute.POST("/models", controller.CreateCanvasCatalogModelAdmin)
 			canvasAdminRoute.PUT("/models", controller.UpdateCanvasCatalogModelAdmin)
+			canvasAdminRoute.PUT("/models/batch-enabled", controller.BatchUpdateCanvasCatalogEnabledAdmin)
 			canvasAdminRoute.DELETE("/models/:id", controller.DeleteCanvasCatalogModelAdmin)
 			canvasAdminRoute.GET("/model-mapping-warnings", controller.GetModelMappingInconsistenciesAdmin)
 			canvasAdminRoute.GET("/catalog-overview", controller.GetCanvasCatalogOverviewAdmin)

@@ -1,13 +1,13 @@
 package controller
 
 import (
-	"strings"
-	"fmt"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/model"
@@ -43,6 +43,7 @@ func setupCatalogAdminTestDB(t *testing.T) *gin.Engine {
 	router.GET("/api/canvas/admin/models/:id", GetCanvasCatalogModelAdmin)
 	router.POST("/api/canvas/admin/models", CreateCanvasCatalogModelAdmin)
 	router.PUT("/api/canvas/admin/models", UpdateCanvasCatalogModelAdmin)
+	router.PUT("/api/canvas/admin/models/batch-enabled", BatchUpdateCanvasCatalogEnabledAdmin)
 	router.DELETE("/api/canvas/admin/models/:id", DeleteCanvasCatalogModelAdmin)
 	return router
 }
@@ -70,11 +71,11 @@ func TestCreateCanvasCatalogModelAdmin(t *testing.T) {
 	router := setupCatalogAdminTestDB(t)
 
 	w, resp := doJSON(t, router, "POST", "/api/canvas/admin/models", model.CanvasCatalogModel{
-		RemoteID:    "kungai-seedance-2",
-		DisplayName: "seedance-2.0",
+		RemoteID:     "kungai-seedance-2",
+		DisplayName:  "seedance-2.0",
 		Capabilities: "video_gen",
-		Contract:    "relay_video_async_v1",
-		Enabled:     boolPtr(true),
+		Contract:     "relay_video_async_v1",
+		Enabled:      boolPtr(true),
 	})
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.True(t, resp.Success)
@@ -285,4 +286,76 @@ func TestCreateCanvasCatalogModelAdminIgnoresDescription(t *testing.T) {
 	var created model.CanvasCatalogModel
 	require.NoError(t, json.Unmarshal(resp.Data, &created))
 	assert.Empty(t, created.Description)
+}
+
+// TestBatchUpdateCanvasCatalogEnabledAdmin 锁定批量上架/下架的契约:只更新
+// 清单内的条目、不存在的 id 静默跳过(以 updated 回显实际行数)、空清单与
+// 缺 enabled 取值必须被拒绝 —— enabled 是指针,false 与「未提供」必须分得开。
+func TestBatchUpdateCanvasCatalogEnabledAdmin(t *testing.T) {
+	router := setupCatalogAdminTestDB(t)
+	ids := make([]int, 0, 3)
+	for _, rid := range []string{"batch-a", "batch-b", "batch-c"} {
+		w, resp := doJSON(t, router, "POST", "/api/canvas/admin/models", model.CanvasCatalogModel{
+			RemoteID:     rid,
+			DisplayName:  rid,
+			Capabilities: "video_gen",
+			Contract:     "relay_video_async_v1",
+			Enabled:      boolPtr(true),
+		})
+		require.Equal(t, http.StatusOK, w.Code)
+		require.True(t, resp.Success)
+		var created model.CanvasCatalogModel
+		require.NoError(t, json.Unmarshal(resp.Data, &created))
+		ids = append(ids, created.Id)
+	}
+
+	// 批量下架前两个;第三个不在清单内,必须原样保留
+	w, resp := doJSON(t, router, "PUT", "/api/canvas/admin/models/batch-enabled", map[string]any{
+		"ids": []int{ids[0], ids[1], 99999}, "enabled": false,
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+	require.True(t, resp.Success)
+	var data struct {
+		Updated int64 `json:"updated"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Data, &data))
+	assert.Equal(t, int64(2), data.Updated, "不存在的 id 不计入 updated")
+
+	rows, err := model.GetAllCanvasCatalogModelsAdmin()
+	require.NoError(t, err)
+	byID := make(map[int]model.CanvasCatalogModel, len(rows))
+	for _, r := range rows {
+		byID[r.Id] = r
+	}
+	first, second, third := byID[ids[0]], byID[ids[1]], byID[ids[2]]
+	assert.False(t, first.IsEnabled(), "清单内的条目应被下架")
+	assert.False(t, second.IsEnabled(), "清单内的条目应被下架")
+	assert.True(t, third.IsEnabled(), "清单外的条目不得被牵连")
+
+	// 批量重新上架
+	w, resp = doJSON(t, router, "PUT", "/api/canvas/admin/models/batch-enabled", map[string]any{
+		"ids": ids, "enabled": true,
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+	require.True(t, resp.Success)
+	rows, err = model.GetAllCanvasCatalogModelsAdmin()
+	require.NoError(t, err)
+	for _, r := range rows {
+		row := r
+		assert.True(t, row.IsEnabled(), "批量上架后全部条目应为启用")
+	}
+
+	// 空清单拒绝
+	w, resp = doJSON(t, router, "PUT", "/api/canvas/admin/models/batch-enabled", map[string]any{
+		"ids": []int{}, "enabled": true,
+	})
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.False(t, resp.Success, "空清单必须报错")
+
+	// 缺 enabled 取值拒绝(false 与「未提供」必须区分)
+	w, resp = doJSON(t, router, "PUT", "/api/canvas/admin/models/batch-enabled", map[string]any{
+		"ids": ids,
+	})
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.False(t, resp.Success, "缺 enabled 必须报错")
 }
