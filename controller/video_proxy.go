@@ -135,8 +135,15 @@ func VideoProxy(c *gin.Context) {
 			return
 		}
 	case constant.ChannelTypeOpenAI, constant.ChannelTypeSora:
-		videoURL = fmt.Sprintf("%s/v1/videos/%s/content", baseURL, task.GetUpstreamTaskID())
-		req.Header.Set("Authorization", "Bearer "+channel.Key)
+		// fdai 等新API形状上游:轮询响应直接给结果直链(已存 ResultURL),它们
+		// 没有 /content 子路径 —— 透传 /content 只会 404→502(实测)。有直链就
+		// 流式转发直链;真 OpenAI/Sora(无直链)才走 /content 透传。
+		if direct := taskDirectVideoURL(task); direct != "" {
+			videoURL = direct
+		} else {
+			videoURL = fmt.Sprintf("%s/v1/videos/%s/content", baseURL, task.GetUpstreamTaskID())
+			req.Header.Set("Authorization", "Bearer "+singleLineKey(channel, task))
+		}
 	default:
 		// Video URL is stored in PrivateData.ResultURL (fallback to FailReason for old data)
 		videoURL = task.GetResultURL()
@@ -239,6 +246,43 @@ func shouldTryLocalArtifact(artifactPath, artifactNode, thisNode string) bool {
 		return false
 	}
 	return true
+}
+
+// taskDirectVideoURL 从任务里提取上游结果直链。优先 ResultURL,但跳过旧版
+// 写成的自引用 /content 代理地址(那会让代理请求自己,而 Sora 渠道的上游根本
+// 没有 /content 子路径,实测 404→502 死循环);再回退 task.Data 里的
+// url/video_url 字段(轮询响应原文,直链的另一个落点)。都没有返回空串,
+// 调用方自行走 /content 透传。
+func taskDirectVideoURL(task *model.Task) string {
+	if r := strings.TrimSpace(task.GetResultURL()); r != "" &&
+		!strings.HasSuffix(r, "/v1/videos/"+task.TaskID+"/content") &&
+		strings.HasPrefix(r, "http") {
+		return r
+	}
+	var dataMap map[string]any
+	if err := common.Unmarshal(task.Data, &dataMap); err == nil {
+		for _, field := range []string{"url", "video_url"} {
+			if v, ok := dataMap[field].(string); ok {
+				if v = strings.TrimSpace(v); v != "" {
+					return v
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// singleLineKey 取一行合法的 key 给 Authorization 头。多 key 渠道的 ch.Key
+// 是「key1\nkey2」整串,直接进请求头会被 net/http 以 invalid header field
+// value 拒绝 —— 优先任务回存的提交 key,兜底取整串的第一行。
+func singleLineKey(channel *model.Channel, task *model.Task) string {
+	if task.PrivateData.Key != "" {
+		return task.PrivateData.Key
+	}
+	if i := strings.IndexByte(channel.Key, '\n'); i > 0 {
+		return channel.Key[:i]
+	}
+	return channel.Key
 }
 
 func writeVideoDataURL(c *gin.Context, dataURL string) error {

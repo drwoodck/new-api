@@ -39,17 +39,21 @@ type ImageURL struct {
 }
 
 type responseTask struct {
-	ID                 string `json:"id"`
-	TaskID             string `json:"task_id,omitempty"` //兼容旧接口
-	Object             string `json:"object"`
-	Model              string `json:"model"`
-	Status             string `json:"status"`
-	Progress           int    `json:"progress"`
-	CreatedAt          int64  `json:"created_at"`
-	CompletedAt        int64  `json:"completed_at,omitempty"`
-	ExpiresAt          int64  `json:"expires_at,omitempty"`
-	Seconds            string `json:"seconds,omitempty"`
-	Size               string `json:"size,omitempty"`
+	ID          string `json:"id"`
+	TaskID      string `json:"task_id,omitempty"` //兼容旧接口
+	Object      string `json:"object"`
+	Model       string `json:"model"`
+	Status      string `json:"status"`
+	Progress    int    `json:"progress"`
+	CreatedAt   int64  `json:"created_at"`
+	CompletedAt int64  `json:"completed_at,omitempty"`
+	ExpiresAt   int64  `json:"expires_at,omitempty"`
+	Seconds     string `json:"seconds,omitempty"`
+	Size        string `json:"size,omitempty"`
+	// Url / VideoURL 是 fdai 等新API形状上游在轮询响应里给的结果直链 ——
+	// 它们没有 /content 子路径,只能靠直链取片。真 OpenAI/Sora 无此字段,留空。
+	Url                string `json:"url,omitempty"`
+	VideoURL           string `json:"video_url,omitempty"`
 	RemixedFromVideoID string `json:"remixed_from_video_id,omitempty"`
 	Error              *struct {
 		Message string `json:"message"`
@@ -307,7 +311,14 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		taskResult.Status = model.TaskStatusInProgress
 	case "completed":
 		taskResult.Status = model.TaskStatusSuccess
-		// Url intentionally left empty — the caller constructs the proxy URL using the public task ID
+		// 结果直链:新API形状上游(fdai 等)直接给 url/video_url,取到就用 ——
+		// 调用方会存进 ResultURL 并优先走直链;真 OpenAI/Sora 两字段皆空,
+		// 调用方退回自引用 /content 代理地址(由 VideoProxy 透传上游 /content)。
+		if resTask.Url != "" {
+			taskResult.Url = resTask.Url
+		} else {
+			taskResult.Url = resTask.VideoURL
+		}
 		// 上游回报的实际时长用于按秒计费的差额结算
 		if seconds, err := strconv.Atoi(resTask.Seconds); err == nil && seconds > 0 {
 			taskResult.DurationSeconds = seconds
