@@ -607,6 +607,11 @@ func RelayTask(c *gin.Context) {
 
 		task := model.InitTask(result.Platform, relayInfo)
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
+		// 回存本次提交实际使用的单把 key：多 key 渠道的 ch.Key 是「key1\nkey2」
+		// 整串，轮询若拿它进 Authorization 头会被 net/http 以 invalid header
+		// field value 拒绝，任务从此永远停在 NOT_START。上游查询接口用的就是
+		// 提交那把 key，所以优先回存、轮询原样取用。
+		task.PrivateData.Key = common.GetContextKeyString(c, constant.ContextKeyChannelKey)
 		task.PrivateData.BillingSource = relayInfo.BillingSource
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
 		task.PrivateData.TokenId = relayInfo.TokenId

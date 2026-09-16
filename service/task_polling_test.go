@@ -496,3 +496,32 @@ func TestSweepTimedOutTasksHonorsRefundRolloutBoundary(t *testing.T) {
 	assert.Equal(t, initialQuota+modernTaskQuota, getUserQuota(t, userID))
 	assert.Equal(t, int64(1), countLogs(t))
 }
+
+// TestResolvePollingTaskKey 锁定轮询取 key 规则:优先提交时回存的单把 key;
+// 缺失时从渠道取一把可用 key 兜底 —— 多 key 渠道的 ch.Key 是「key1\nkey2」
+// 整串,裸用会被 net/http 以 invalid header field value 拒绝(线上实测:
+// 任务全部卡在 NOT_START、进度 0%)。
+func TestResolvePollingTaskKey(t *testing.T) {
+	multiKeyChannel := &model.Channel{
+		Key: "key-a\nkey-b",
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 2,
+		},
+	}
+
+	// 历史任务没有回存 key → 兜底取单把,绝不能是带换行的整串
+	task := &model.Task{}
+	got := resolvePollingTaskKey(multiKeyChannel, task)
+	require.NotEmpty(t, got)
+	require.NotContains(t, got, "\n", "轮询 key 必须是单把,整串会打不出合法请求头")
+
+	// 提交时回存过的 key 优先原样取用
+	task.PrivateData.Key = "key-submit"
+	assert.Equal(t, "key-submit", resolvePollingTaskKey(multiKeyChannel, task))
+
+	// 单 key 渠道兜底即该 key 本身
+	single := &model.Channel{Key: "sk-single"}
+	task2 := &model.Task{}
+	assert.Equal(t, "sk-single", resolvePollingTaskKey(single, task2))
+}

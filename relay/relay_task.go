@@ -230,8 +230,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	//    按次档位计费（request 档）是固定价：适配器恒注入的 seconds/size 等
 	//    倍率与按次语义无关，必须跳过应用 —— 否则固定价被放大数倍且
 	//    PerCallBilling 跳过结算、超扣永不纠偏。
+	//    按次固定价（model_price 全包价）同理，且同样跳过结算无法纠偏 ——
+	//    自动识别，不再依赖 TaskPricePatches 手工名单。
 	tierRequestBilling := taskIsTierRequestBilling(info.PriceData)
-	if !tierRequestBilling && (perSecondBilling || !common.StringsContains(constant.TaskPricePatches, modelName)) {
+	perCallFixedBilling := taskIsPerCallFixedBilling(info.PriceData)
+	if !tierRequestBilling && !perCallFixedBilling && (perSecondBilling || !common.StringsContains(constant.TaskPricePatches, modelName)) {
 		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
 		quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
 		info.PriceData.Quota = quota
@@ -358,6 +361,14 @@ func applyMaterialBilling(c *gin.Context, info *relaycommon.RelayInfo, explicitS
 // 也经 PerCallBilling 跳过 —— 两处护栏共用这一个判定，防止口径漂移。
 func taskIsTierRequestBilling(priceData hosttypes.PriceData) bool {
 	return priceData.TierBilling && priceData.TierBillingUnit == hosttypes.BillingUnitRequest
+}
+
+// taskIsPerCallFixedBilling 判定是否按次固定价计费：管理员配置了 model_price
+// （每次全包价）且未启用按秒价/档位计费。全包价不吃适配器注入的时长等倍率 ——
+// 放大后的超扣会因 PerCallBilling 跳过结算而永不纠偏（实测:0.9 元/次被乘出
+// 0.9×8 秒），所以固定价必须在步骤 6 跳过倍率应用。
+func taskIsPerCallFixedBilling(priceData hosttypes.PriceData) bool {
+	return !priceData.TierBilling && priceData.UsePrice && priceData.VideoSecondPrice <= 0
 }
 
 // applyVideoSecondPricing 为按秒计费的模型解析并注入时长倍率。

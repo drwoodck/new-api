@@ -43,3 +43,20 @@ func TestTierDimensionRatioKeysFiltering(t *testing.T) {
 	require.Contains(t, ratios, "seconds", "计费时长必须保留")
 	require.Contains(t, ratios, "video_input", "正交成本维度必须保留")
 }
+
+// TestTaskIsPerCallFixedBilling 锁定按次固定价的判定:管理员配置 model_price
+// 全包价(UsePrice)且未启用档位/按秒时,适配器注入的 seconds 倍率不得应用 ——
+// 否则全包价被乘成「单价×时长」(0.9 元/次 × 8 秒)且 PerCallBilling 跳过
+// 结算、超扣永不纠偏。
+func TestTaskIsPerCallFixedBilling(t *testing.T) {
+	assert.True(t, taskIsPerCallFixedBilling(hosttypes.PriceData{UsePrice: true}),
+		"按次全包价必须跳过倍率应用")
+	assert.False(t, taskIsPerCallFixedBilling(hosttypes.PriceData{
+		UsePrice: true, VideoSecondPrice: 0.7,
+	}), "按秒计费不吃这个豁免(时长是计费的必要组成)")
+	assert.False(t, taskIsPerCallFixedBilling(hosttypes.PriceData{
+		UsePrice: true, TierBilling: true,
+	}), "档位计费有自己的维度护栏,不走按次豁免")
+	assert.False(t, taskIsPerCallFixedBilling(hosttypes.PriceData{}),
+		"倍率计费(ratio)保持既有行为")
+}

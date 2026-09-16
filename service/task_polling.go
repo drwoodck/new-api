@@ -440,6 +440,20 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 	return nil
 }
 
+// resolvePollingTaskKey 决定轮询上游时用的 key：优先提交时回存的单把 key；
+// 缺失（历史任务等）时从渠道取一把可用 key 兜底。多 key 渠道的 ch.Key 是
+// 「key1\nkey2」整串，直接塞进 Authorization 头会被 net/http 以 invalid
+// header field value 拒绝，轮询从此全部失败 —— 不能裸用。
+func resolvePollingTaskKey(ch *model.Channel, task *model.Task) string {
+	if task.PrivateData.Key != "" {
+		return task.PrivateData.Key
+	}
+	if key, _, err := ch.GetNextEnabledKey(); err == nil {
+		return key
+	}
+	return ch.Key
+}
+
 func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *model.Channel, taskId string, taskM map[string]*model.Task) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -455,12 +469,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		logger.LogError(ctx, fmt.Sprintf("Task %s not found in taskM", taskId))
 		return fmt.Errorf("task %s not found", taskId)
 	}
-	key := ch.Key
-
-	privateData := task.PrivateData
-	if privateData.Key != "" {
-		key = privateData.Key
-	}
+	key := resolvePollingTaskKey(ch, task)
 	resp, err := adaptor.FetchTask(baseURL, key, map[string]any{
 		"task_id": task.GetUpstreamTaskID(),
 		"action":  task.Action,
