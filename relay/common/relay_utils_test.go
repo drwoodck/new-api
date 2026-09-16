@@ -102,9 +102,14 @@ func TestTaskSubmitReqAcceptsAspectRatio(t *testing.T) {
 	require.Equal(t, "9:16", storedReq.AspectRatio)
 }
 
-// TestMultipartTaskRequestAcceptsAspectRatio 覆盖 multipart 分支：白名单只作用于
-// 这条路径，不在表里的字段会被折叠进 metadata 而不是进 AspectRatio。
-func TestMultipartTaskRequestAcceptsAspectRatio(t *testing.T) {
+// TestValidateMultipartTaskRequestAcceptsAspectRatio 直接打 validateMultipartTaskRequest。
+//
+// 不能用 ValidateMultipartDirect 测：那条路走 UnmarshalBodyReusable → processFormMap
+// 按 JSON tag 填字段，根本不经过本函数，拿它测等于什么都没测。
+//
+// 两个断言钉住两件必须同时成立的事：字段被显式接取；**并且仍然**折叠进 metadata
+// —— kling/jimeng 的 multipart 路径正是从 metadata["aspect_ratio"] 读画幅。
+func TestValidateMultipartTaskRequestAcceptsAspectRatio(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
@@ -119,14 +124,12 @@ func TestMultipartTaskRequestAcceptsAspectRatio(t *testing.T) {
 	context.Request = request
 	info := &RelayInfo{TaskRelayInfo: &TaskRelayInfo{}}
 
-	taskErr := ValidateMultipartDirect(context, info)
-	require.Nil(t, taskErr)
-
-	storedReq, err := GetTaskRequest(context)
+	req, err := validateMultipartTaskRequest(context, info, constant.TaskActionGenerate)
 	require.NoError(t, err)
-	require.Equal(t, "9:16", storedReq.AspectRatio)
-	_, foldedIntoMetadata := storedReq.Metadata["aspect_ratio"]
-	require.False(t, foldedIntoMetadata, "已在白名单里，不应再被折叠进 metadata")
+
+	require.Equal(t, "9:16", req.AspectRatio)
+	require.Equal(t, "9:16", req.Metadata["aspect_ratio"],
+		"必须同时保留 metadata 折叠：kling/jimeng 的 multipart 路径从那里读画幅")
 }
 
 // TestTaskDurationBounds guards the billing invariant that user-supplied

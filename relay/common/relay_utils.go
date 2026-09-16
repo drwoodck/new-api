@@ -377,10 +377,12 @@ func isKnownTaskField(field string) bool {
 		"size":            true,
 		"duration":        true,
 		"input_reference": true, // Sora 特有字段
-		// 画幅。画布发在顶层 aspect_ratio 上，不列进来会被下面的兜底循环
-		// 折叠进 metadata，AspectRatio 就永远是空的。
-		"aspect_ratio": true,
 	}
+	// aspect_ratio 刻意**不**入此表：下面的兜底循环会把它折叠进 Metadata，而
+	// kling/jimeng 的 multipart 路径正是从 metadata["aspect_ratio"] 读画幅
+	// （mergeFromMetadata 在按 size 推导之后覆盖）。列进来只是把它从那条既有
+	// 通道上抢到一个没人读的字段上。validateMultipartTaskRequest 已经显式
+	// 读取它填 AspectRatio，两条路并存，谁也不挡谁。
 	return knownFields[field]
 }
 
