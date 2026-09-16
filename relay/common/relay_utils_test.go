@@ -1,6 +1,8 @@
 package common
 
 import (
+	"bytes"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -75,6 +77,56 @@ func TestValidateMultipartDirectNormalizesImageField(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"https://example.com/first.png"}, storedReq.Images)
 	require.Equal(t, constant.TaskActionGenerate, info.Action)
+}
+
+// TestTaskSubmitReqAcceptsAspectRatio：画布把画幅发在顶层 aspect_ratio 上。
+//
+// Sora 类渠道的 BuildRequestBody 是**原样透传** body 的（只替换 model），所以
+// 这个字段本来就能抵达上游；但 TaskSubmitReq 此前没有它，encoding/json 会静默
+// 丢弃 —— 转发路径无碍，校验与档位推导（含 admin_tier_diagnostics 那个「空请求」
+// 模拟）却看不到它，会误判成用户什么都没选。
+func TestTaskSubmitReqAcceptsAspectRatio(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := `{"model":"sd2.5-30s","prompt":"a cat","aspect_ratio":"9:16"}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = request
+	info := &RelayInfo{TaskRelayInfo: &TaskRelayInfo{}}
+
+	taskErr := ValidateMultipartDirect(context, info)
+	require.Nil(t, taskErr)
+
+	storedReq, err := GetTaskRequest(context)
+	require.NoError(t, err)
+	require.Equal(t, "9:16", storedReq.AspectRatio)
+}
+
+// TestMultipartTaskRequestAcceptsAspectRatio 覆盖 multipart 分支：白名单只作用于
+// 这条路径，不在表里的字段会被折叠进 metadata 而不是进 AspectRatio。
+func TestMultipartTaskRequestAcceptsAspectRatio(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	require.NoError(t, writer.WriteField("model", "sd2.5-30s"))
+	require.NoError(t, writer.WriteField("prompt", "a cat"))
+	require.NoError(t, writer.WriteField("aspect_ratio", "9:16"))
+	require.NoError(t, writer.Close())
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/videos", &buf)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = request
+	info := &RelayInfo{TaskRelayInfo: &TaskRelayInfo{}}
+
+	taskErr := ValidateMultipartDirect(context, info)
+	require.Nil(t, taskErr)
+
+	storedReq, err := GetTaskRequest(context)
+	require.NoError(t, err)
+	require.Equal(t, "9:16", storedReq.AspectRatio)
+	_, foldedIntoMetadata := storedReq.Metadata["aspect_ratio"]
+	require.False(t, foldedIntoMetadata, "已在白名单里，不应再被折叠进 metadata")
 }
 
 // TestTaskDurationBounds guards the billing invariant that user-supplied

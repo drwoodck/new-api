@@ -883,6 +883,16 @@ type TaskSubmitReq struct {
 	// 渠道默认的 720p 上计费（480p 档配了也用不上，1080p/4k 则少收）。
 	// 显式接收它才能让分辨率真正参与选档。
 	Resolution string `json:"resolution,omitempty"`
+	// AspectRatio 是请求体顶层的画幅字段（"16:9"/"9:16"/…），画布一直这么发。
+	//
+	// Sora 类渠道的 BuildRequestBody 是**原样透传** body 的（只替换 model），所以
+	// 这个字段本来就能抵达上游；但本结构体此前没有它，encoding/json 会静默丢弃
+	// —— 转发路径无碍，校验与档位推导却看不到它（admin_tier_diagnostics 那个
+	// 「空请求」模拟就是被这一点坑的：诊断里所有档位都按用户什么都没选来算）。
+	//
+	// 只做接收，**不接入 BuildTierInputFromRequest**：现有档位维度是分辨率与时长，
+	// 把画幅并入选档是另一个决定，需要时另开改动。
+	AspectRatio string `json:"aspect_ratio,omitempty"`
 }
 
 func (t *TaskSubmitReq) GetPrompt() string {
