@@ -24,6 +24,10 @@ import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from '@/components/ui/native-select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   exportExcel,
@@ -45,6 +49,10 @@ import {
   formatOverviewGroupPrice,
   formatOverviewStatus,
 } from './components/canvas-catalog-overview-table'
+import {
+  matchesOverviewStatusFilter,
+  type CatalogStatusFilter,
+} from './components/overview-status-filter'
 import {
   matchesQuery,
   TableSearchInput,
@@ -190,19 +198,35 @@ export function CanvasCatalogSection() {
   }, [metadataRows])
 
   // 两个页签各用各的搜索词 —— 它们看的是两批不相干的模型,共用一份查询
-  // 会让「切过去发现上一条搜索还生效」变成常态。
+  // 会让「切过去发现上一条搜索还生效」变成常态。状态筛选同理,而且两个
+  // 页签的档位本就不同(未配置页签没有目录条目,只有模型启用/停用),
+  // 共用一份状态还会出现「带着『目录上架』切页签、表格被筛成空」的怪相。
   const [configuredQuery, setConfiguredQuery] = useState('')
   const [unconfiguredQuery, setUnconfiguredQuery] = useState('')
+  const [configuredStatus, setConfiguredStatus] =
+    useState<CatalogStatusFilter>('all')
+  const [unconfiguredStatus, setUnconfiguredStatus] =
+    useState<CatalogStatusFilter>('all')
 
   // 过滤只作用于表格内容,页签上的计数仍取全量:计数代表「这一类有多少个」,
-  // 搜索时跟着变会让人以为数据被删了。
+  // 搜索时跟着变会让人以为数据被删了。搜索与状态筛选是「且」的关系。
   const visibleConfigured = useMemo(
-    () => configured.filter((row) => overviewRowMatches(configuredQuery, row)),
-    [configured, configuredQuery]
+    () =>
+      configured.filter(
+        (row) =>
+          overviewRowMatches(configuredQuery, row) &&
+          matchesOverviewStatusFilter(configuredStatus, 'configured', row)
+      ),
+    [configured, configuredQuery, configuredStatus]
   )
   const visibleUnconfigured = useMemo(
-    () => unconfigured.filter((row) => overviewRowMatches(unconfiguredQuery, row)),
-    [unconfigured, unconfiguredQuery]
+    () =>
+      unconfigured.filter(
+        (row) =>
+          overviewRowMatches(unconfiguredQuery, row) &&
+          matchesOverviewStatusFilter(unconfiguredStatus, 'unconfigured', row)
+      ),
+    [unconfigured, unconfiguredQuery, unconfiguredStatus]
   )
 
   const handleCreate = () => {
@@ -394,12 +418,36 @@ export function CanvasCatalogSection() {
           <p className='text-muted-foreground text-sm'>
             {t('画布客户端通过 /api/canvas/catalog 拉取以下条目。')}
           </p>
-          <TableSearchInput
-            value={configuredQuery}
-            onChange={setConfiguredQuery}
-            placeholder={t('搜索模型名 / 显示名 / 说明 / 分组')}
-            clearLabel={t('清除搜索')}
-          />
+          <div className='flex items-center gap-2'>
+            <TableSearchInput
+              value={configuredQuery}
+              onChange={setConfiguredQuery}
+              placeholder={t('搜索模型名 / 显示名 / 说明 / 分组')}
+              clearLabel={t('清除搜索')}
+            />
+            <NativeSelect
+              size='sm'
+              value={configuredStatus}
+              onChange={(event) =>
+                setConfiguredStatus(event.target.value as CatalogStatusFilter)
+              }
+              aria-label={t('按状态筛选')}
+            >
+              <NativeSelectOption value='all'>{t('全部状态')}</NativeSelectOption>
+              <NativeSelectOption value='listed'>
+                {t('目录上架')}
+              </NativeSelectOption>
+              <NativeSelectOption value='unlisted'>
+                {t('目录下架')}
+              </NativeSelectOption>
+              <NativeSelectOption value='model_enabled'>
+                {t('模型启用')}
+              </NativeSelectOption>
+              <NativeSelectOption value='model_disabled'>
+                {t('模型停用')}
+              </NativeSelectOption>
+            </NativeSelect>
+          </div>
           {selectedConfiguredIds.length > 0 && (
             <div className='flex items-center gap-2'>
               <span className='text-muted-foreground text-sm'>
@@ -443,7 +491,7 @@ export function CanvasCatalogSection() {
             selectedIds={selectedConfiguredIds}
             onSelectedChange={setSelectedConfiguredIds}
             emptyContent={
-              configuredQuery.trim() === ''
+              configuredQuery.trim() === '' && configuredStatus === 'all'
                 ? t('尚未有画布可用的模型。')
                 : t('没有匹配的模型。')
             }
@@ -465,17 +513,37 @@ export function CanvasCatalogSection() {
               '这些模型还没有画布目录配置(缺显示名或契约,画布同步时会跳过)。既包含已在中转站启用、只差目录配置的,也包含已在元信息页配过、但还没接渠道的。'
             )}
           </p>
-          <TableSearchInput
-            value={unconfiguredQuery}
-            onChange={setUnconfiguredQuery}
-            placeholder={t('搜索模型名 / 显示名 / 说明 / 分组')}
-            clearLabel={t('清除搜索')}
-          />
+          <div className='flex items-center gap-2'>
+            <TableSearchInput
+              value={unconfiguredQuery}
+              onChange={setUnconfiguredQuery}
+              placeholder={t('搜索模型名 / 显示名 / 说明 / 分组')}
+              clearLabel={t('清除搜索')}
+            />
+            {/* 未配置页签的行没有目录条目,状态列也不显示上架徽标,
+                所以上架/下架两档不出现 —— 出现了只会筛出恒空的表。 */}
+            <NativeSelect
+              size='sm'
+              value={unconfiguredStatus}
+              onChange={(event) =>
+                setUnconfiguredStatus(event.target.value as CatalogStatusFilter)
+              }
+              aria-label={t('按状态筛选')}
+            >
+              <NativeSelectOption value='all'>{t('全部状态')}</NativeSelectOption>
+              <NativeSelectOption value='model_enabled'>
+                {t('模型启用')}
+              </NativeSelectOption>
+              <NativeSelectOption value='model_disabled'>
+                {t('模型停用')}
+              </NativeSelectOption>
+            </NativeSelect>
+          </div>
           <CanvasCatalogOverviewTable
             rows={visibleUnconfigured}
             mode='unconfigured'
             emptyContent={
-              unconfiguredQuery.trim() === ''
+              unconfiguredQuery.trim() === '' && unconfiguredStatus === 'all'
                 ? t('所有已启用模型都已配置完成。')
                 : t('没有匹配的模型。')
             }
