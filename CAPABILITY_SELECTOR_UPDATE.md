@@ -149,6 +149,7 @@ const knownCapabilities = meta
 // map[string]string{
 //     "video_gen": "relay_video_async_v1",
 //     "image_gen": "relay_image_async_v1",
+//     "chat":      "relay_chat_v1",
 // }
 ```
 

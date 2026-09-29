@@ -22,6 +22,12 @@ import (
 // 而唯一明确的 gpt-image 系列跑在 ChannelTypeOpenAI 上,该类型已在此表里被
 // video_gen 占用(OpenAI 兼容第三方走 Sora 适配器)。没有可独占映射为 image_gen
 // 的渠道类型,故不猜、留空手填。
+//
+// 这张表只决定「自动起草时填什么 capability」,与画布支持哪些 capability 无关 ——
+// 后者见 constant/canvas_contract.go。所以 constant 侧新增 chat 契约时这里不用动;
+// 真要让巡检自动起草对话模型(而不是让它们停在「未配置」页)才需要补映射,
+// 那是独立的一件事,别忘了同步改 TestDraftCatalogCreatesEntryAndMetaRow 里
+// 钉住 video_gen 的断言思路。
 var channelTypeToCapability = map[int]string{
 	constant.ChannelTypeSora:        "video_gen",
 	constant.ChannelTypeOpenAI:      "video_gen", // OpenAI 兼容第三方走 Sora 适配器

@@ -16,6 +16,7 @@
 var capabilityToContract = map[string]string{
     "video_gen": "relay_video_async_v1",  // 所有视频生成
     "image_gen": "relay_image_async_v1",  // 图片生成
+    "chat":      "relay_chat_v1",         // 对话
 }
 ```
 

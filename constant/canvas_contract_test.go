@@ -6,6 +6,7 @@ func TestContractForCapabilityKnownCapabilities(t *testing.T) {
 	cases := map[string]string{
 		"video_gen": "relay_video_async_v1",
 		"image_gen": "relay_image_async_v1",
+		"chat":      "relay_chat_v1",
 	}
 	for capability, want := range cases {
 		got, ok := ContractForCapability(capability)
@@ -30,7 +31,7 @@ func TestContractForCapabilityUnknownReturnsFalse(t *testing.T) {
 }
 
 func TestIsSupportedContractKnownValues(t *testing.T) {
-	for _, contract := range []string{"relay_video_async_v1", "relay_image_async_v1"} {
+	for _, contract := range []string{"relay_video_async_v1", "relay_image_async_v1", "relay_chat_v1"} {
 		if !IsSupportedContract(contract) {
 			t.Errorf("contract %q: expected supported", contract)
 		}

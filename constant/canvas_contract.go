@@ -4,8 +4,9 @@ import "sort"
 
 // ContractForCapability 把画布目录条目的 capability 映射到画布客户端的契约模板 id。
 //
-// 画布侧总共只有两个契约(src-tauri/src/relay/contracts.rs 的 SUPPORTED_CONTRACTS:
-// relay_video_async_v1、relay_image_async_v1),与 capability 一一对应,所以显式表就够 ——
+// 画布侧总共只有三个契约(src-tauri/src/relay/contracts.rs 的 SUPPORTED_CONTRACTS:
+// relay_video_async_v1、relay_image_async_v1、relay_chat_v1),与 capability 一一对应,
+// 所以显式表就够 ——
 // 不走 supported_endpoint_types 推导。那个值是 common.GetEndpointTypesByChannelType
 // 按渠道类型算出来再对启用的 abilities 聚合的结果,是「这个渠道能力上支持什么协议」,
 // 不是「这个模型该用哪个画布契约」的声明,两者不是一一对应关系。
@@ -13,9 +14,15 @@ import "sort"
 // 新增契约时这里要同步加一行,且必须先确认画布客户端已发版支持 ——
 // 上线前用 GET /api/canvas_catalog/contract-stats 看在线客户端的支持率,
 // 支持率为 0 就先别上架,那等于挂了个谁都调不动的模型。
+//
+// relay_chat_v1 尤其要守这条纪律:它对应的是对话模型,而画布侧存在大量尚未升级的
+// 老客户端(它们的 SUPPORTED_CONTRACTS 只有 video/image 两项)。在老客户端上架对话
+// 模型,那些客户端会把条目按 UnknownContract 静默丢掉,而运营在目录后台看到的
+// 却一切正常。
 var capabilityToContract = map[string]string{
 	"video_gen": "relay_video_async_v1",
 	"image_gen": "relay_image_async_v1",
+	"chat":      "relay_chat_v1",
 }
 
 // ContractForCapability 返回 capability 对应的默认契约。

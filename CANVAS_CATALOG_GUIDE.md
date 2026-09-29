@@ -65,6 +65,7 @@ Claude 3.5 Sonnet
 |---------|------|--------------|
 | `video_gen` | 视频生成能力 | `relay_video_async_v1` |
 | `image_gen` | 图片生成能力 | `relay_image_async_v1` |
+| `chat` | 对话能力 | `relay_chat_v1` |
 
 **填写规则**:
 - 可以填写多个能力，用逗号、顿号、分号或空格分隔
@@ -101,6 +102,7 @@ Contract: relay_video_async_v1
 |--------------|-----|----------|
 | `relay_video_async_v1` | 异步视频生成协议 | video_gen |
 | `relay_image_async_v1` | 异步图片生成协议 | image_gen |
+| `relay_chat_v1` | 对话协议（OpenAI 兼容 /v1/chat/completions） | chat |
 
 **填写规则**:
 - 必填项，不能为空
@@ -137,6 +139,7 @@ Contract: relay_video_async_v1
 ├──────────────┤  ───→   ├─────────────────────────┤
 │ video_gen    │         │ relay_video_async_v1    │
 │ image_gen    │         │ relay_image_async_v1    │
+│ chat         │         │ relay_chat_v1           │
 └──────────────┘         └─────────────────────────┘
 ```
 
@@ -329,6 +332,7 @@ sort_order: 20 → 第三优先
 **答案**:
 - **视频生成模型**：选择 `relay_video_async_v1`
 - **图片生成模型**：选择 `relay_image_async_v1`
+- **对话模型**：选择 `relay_chat_v1`
 - **不确定时**：先填写能力字段，让系统自动推导
 
 ### Q3: 能力和 Contract 有什么区别？
@@ -388,6 +392,7 @@ type CanvasCatalogModel struct {
 var capabilityToContract = map[string]string{
     "video_gen": "relay_video_async_v1",
     "image_gen": "relay_image_async_v1",
+    "chat":      "relay_chat_v1",
 }
 
 // 检查 Contract 是否受支持
