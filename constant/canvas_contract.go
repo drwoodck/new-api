@@ -12,8 +12,10 @@ import "sort"
 // 不是「这个模型该用哪个画布契约」的声明,两者不是一一对应关系。
 //
 // 新增契约时这里要同步加一行,且必须先确认画布客户端已发版支持 ——
-// 上线前用 GET /api/canvas_catalog/contract-stats 看在线客户端的支持率,
+// 上线前用 GET /api/canvas/admin/contract-stats 看在线客户端的支持率,
 // 支持率为 0 就先别上架,那等于挂了个谁都调不动的模型。
+// (路径在 canvasAdminRoute 分组下,要管理员身份;画布客户端自己拉目录走的是
+//  /api/canvas/catalog,两者不是一回事。)
 //
 // relay_chat_v1 尤其要守这条纪律:它对应的是对话模型,而画布侧存在大量尚未升级的
 // 老客户端(它们的 SUPPORTED_CONTRACTS 只有 video/image 两项)。在老客户端上架对话

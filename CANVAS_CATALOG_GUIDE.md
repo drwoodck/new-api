@@ -403,7 +403,7 @@ func IsSupportedContract(contract string) bool {
 ```
 
 ### 目录同步机制
-1. 画布客户端定期调用 `/api/canvas_catalog` 获取目录
+1. 画布客户端定期调用 `/api/canvas/catalog` 获取目录
 2. 服务器返回所有条目（包括停用的）
 3. 客户端根据 `enabled` 和 `contract` 过滤可用模型
 4. 未知 contract 的条目会被跳过
