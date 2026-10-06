@@ -12,8 +12,14 @@ import (
 // (canvas-catalog-form-dialog.tsx 的 CONTRACT_BY_CAPABILITY),与后端
 // constant/canvas_contract.go 双源漂移 —— 现在统一由这里下发。
 func GetCanvasCatalogMetaAdmin(c *gin.Context) {
+	contracts := constant.SupportedContracts()
+	mapping := constant.CapabilityToContractMap()
+
+	common.SysLog("canvas_catalog_meta: supported_contracts=" + common.ToJsonString(contracts))
+	common.SysLog("canvas_catalog_meta: capability_to_contract=" + common.ToJsonString(mapping))
+
 	common.ApiSuccess(c, gin.H{
-		"supported_contracts":    constant.SupportedContracts(),
-		"capability_to_contract": constant.CapabilityToContractMap(),
+		"supported_contracts":    contracts,
+		"capability_to_contract": mapping,
 	})
 }
