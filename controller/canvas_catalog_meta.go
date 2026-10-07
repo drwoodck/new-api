@@ -15,8 +15,8 @@ func GetCanvasCatalogMetaAdmin(c *gin.Context) {
 	contracts := constant.SupportedContracts()
 	mapping := constant.CapabilityToContractMap()
 
-	common.SysLog("canvas_catalog_meta: supported_contracts=" + common.ToJsonString(contracts))
-	common.SysLog("canvas_catalog_meta: capability_to_contract=" + common.ToJsonString(mapping))
+	common.SysLog("canvas_catalog_meta: supported_contracts=" + common.GetJsonString(contracts))
+	common.SysLog("canvas_catalog_meta: capability_to_contract=" + common.GetJsonString(mapping))
 
 	common.ApiSuccess(c, gin.H{
 		"supported_contracts":    contracts,
