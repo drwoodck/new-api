@@ -444,7 +444,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	switch info.RelayMode {
 	case relayconstant.RelayModeImagesEdits:
 		if isJSONRequest(c) {
-			return request, nil
+			return imageRequestBody(request, info), nil
 		}
 
 		var requestBody bytes.Buffer
@@ -570,8 +570,47 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		return &requestBody, nil
 
 	default:
-		return request, nil
+		return imageRequestBody(request, info), nil
 	}
+}
+
+// imageRequestBody 决定图片请求发给上游时,要不要带上「客户端发来了、但
+// dto.ImageRequest 没声明」的字段。
+//
+// 背景(2026-10-25 实测):dto.ImageRequest 只声明 OpenAI 官方那套字段,
+// aspect_ratio / resolution(以及 Midjourney 的 action、version、image_size…)
+// 都会落进 Extra,并在 MarshalJSON 时被丢掉 —— 上游于是回落到自己的默认值。
+// 现象:画布上选 9:16,经中转站出 16:9;同一份 body 直连上游却是 9:16。
+//
+// 只对**非官方**上游打开:官方 api.openai.com / Azure 不认识这些字段,收到直接
+// 400,所以那边必须保持原样(这就是 MarshalJSON 里「不无条件合并 Extra」的原因)。
+func imageRequestBody(request dto.ImageRequest, info *relaycommon.RelayInfo) dto.ImageRequest {
+	// ChannelMeta 是嵌入的指针,测试/边角路径可能没初始化 —— 拿不到 base_url 时按
+	// 官方处理,保持"不把未知参数发给上游"的默认口径。
+	if info != nil && info.ChannelMeta != nil && !isOfficialOpenAIImageUpstream(info.ChannelBaseUrl) {
+		request.PassthroughExtra = true
+	}
+	return request
+}
+
+// isOfficialOpenAIImageUpstream 判断渠道 base_url 是不是官方 OpenAI / Azure OpenAI。
+//
+// base_url 为空 = 走默认地址(官方),按官方处理;解析不出主机名的(比如只填了
+// 域名没带 scheme)按自建上游处理 —— 宁可透传,别把自建网关的画幅参数再吞一次。
+func isOfficialOpenAIImageUpstream(rawBaseURL string) bool {
+	rawBaseURL = strings.TrimSpace(rawBaseURL)
+	if rawBaseURL == "" {
+		return true
+	}
+	u, err := url.Parse(rawBaseURL)
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "openai.com" || strings.HasSuffix(host, ".openai.com") {
+		return true
+	}
+	return strings.HasSuffix(host, ".openai.azure.com")
 }
 
 func isJSONRequest(c *gin.Context) bool {

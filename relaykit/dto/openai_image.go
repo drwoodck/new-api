@@ -40,6 +40,16 @@ type ImageRequest struct {
 	Image            json.RawMessage `json:"image,omitempty"`
 	// 用匿名参数接收额外参数
 	Extra map[string]json.RawMessage `json:"-"`
+	// PassthroughExtra 控制序列化时是否把 Extra（客户端发来、但本结构体没声明的
+	// 字段）原样带回去。默认 false。
+	//
+	// 为什么不无条件合并：官方 OpenAI / Azure 的图片接口对不认识的参数直接 400，
+	// 无条件合并会把它们打死（历史事故，见 MarshalJSON 里那段注释）。而「自建 /
+	// 第三方 OpenAI 兼容网关」恰恰依赖这些参数——画布模型的 aspect_ratio、
+	// resolution，Midjourney 的 action / version / image_size 等都不在本字段表里，
+	// 不透传等于用户选什么都没生效。所以由调用方（relay/channel/openai 的
+	// ConvertImageRequest）按渠道 base_url 决定：官方上游保持 false，其它置 true。
+	PassthroughExtra bool `json:"-"`
 }
 
 func (i *ImageRequest) UnmarshalJSON(data []byte) error {
@@ -85,13 +95,17 @@ func (r ImageRequest) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 
-	// 不能合并ExtraFields！！！！！！！！
-	// 合并 ExtraFields
-	//for k, v := range r.Extra {
-	//	if _, exists := baseMap[k]; !exists {
-	//		baseMap[k] = v
-	//	}
-	//}
+	// 不能无条件合并 ExtraFields！！！！！！！！
+	// 官方 OpenAI / Azure 渠道收到不认识的参数会直接 400，所以默认丢弃；
+	// 只有调用方显式打开 PassthroughExtra（非官方上游）时才回传，避免历史上
+	// 「把客户端随手带的字段透传给 OpenAI 导致整条链路 400」的事故重演。
+	if r.PassthroughExtra {
+		for k, v := range r.Extra {
+			if _, exists := baseMap[k]; !exists {
+				baseMap[k] = v
+			}
+		}
+	}
 
 	return kitutil.Marshal(baseMap)
 }
