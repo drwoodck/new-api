@@ -11,12 +11,27 @@ import (
 	"gorm.io/gorm"
 )
 
+// setupTestDB 给画布 token 用例一个独立内存库,并在用例结束时把 model.DB 还原。
+//
+// 此前这里直接覆盖 model.DB 且**从不还原**,用例 defer 里又把私有库的连接关掉 ——
+// 于是跑过任何一个画布 token 用例之后,本包其它用例(如 catalog_draft_test.go
+// 那批)拿到的 model.DB 指向一个已关闭的连接,整包一片
+// "sql: database is closed"。单跑各自都绿,只有整包才炸。
 func setupTestDB(t *testing.T) *gorm.DB {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	t.Helper()
+	dsn := "file:canvas_token_" + t.Name() + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	err = db.AutoMigrate(&model.Token{})
-	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Token{}))
+
+	previous := model.DB
 	model.DB = db
+	t.Cleanup(func() {
+		model.DB = previous
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
 	return db
 }
 

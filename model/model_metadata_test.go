@@ -3,20 +3,38 @@ package model
 import (
 	"testing"
 
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
-func TestModelMetadata_CRUD(t *testing.T) {
-	err := InitDB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer CloseDB()
-
-	// 确保表存在
-	err = DB.AutoMigrate(&ModelMetadata{})
+// setupModelMetadataTestDB 给每个用例一个独立内存库,并在结束时把包级 DB 还原成
+// TestMain 建的共享实例。
+//
+// 这里以前用 InitDB()/CloseDB():CloseDB() 关的是**全局** DB —— TestMain 那份装好
+// User/Task/Token 等一整套表的共享库被一起关掉,于是本包按文件序排在这些用例之后
+// 的测试(如 model_owner_test.go)全部撞上 "sql: database is closed"。
+// 单跑这几个用例永远是绿的,跑整包才炸 —— 典型的测试间污染。
+func setupModelMetadataTestDB(t *testing.T) {
+	t.Helper()
+	dsn := "file:model_metadata_" + t.Name() + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&ModelMetadata{}))
+
+	originalDB, originalLogDB := DB, LOG_DB
+	DB, LOG_DB = db, db
+	t.Cleanup(func() {
+		DB, LOG_DB = originalDB, originalLogDB
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+}
+
+func TestModelMetadata_CRUD(t *testing.T) {
+	setupModelMetadataTestDB(t)
 
 	// 插入测试数据
 	paramSchema := `{"fields":[{"name":"duration","type":"number"}]}`
@@ -24,7 +42,7 @@ func TestModelMetadata_CRUD(t *testing.T) {
 		ModelName:   "test-model",
 		ParamSchema: &paramSchema,
 	}
-	err = UpsertModelMetadata(meta)
+	err := UpsertModelMetadata(meta)
 	require.NoError(t, err)
 
 	// 查询单个
@@ -42,11 +60,7 @@ func TestModelMetadata_CRUD(t *testing.T) {
 }
 
 func TestGetModelMetadataMap_EmptyInput(t *testing.T) {
-	err := InitDB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer CloseDB()
+	setupModelMetadataTestDB(t)
 
 	result, err := GetModelMetadataMap([]string{})
 	require.NoError(t, err)
@@ -54,9 +68,7 @@ func TestGetModelMetadataMap_EmptyInput(t *testing.T) {
 }
 
 func TestUpsertModelMetadata_SecondWriteUpdatesInPlace(t *testing.T) {
-	require.NoError(t, InitDB())
-	defer CloseDB()
-	require.NoError(t, DB.AutoMigrate(&ModelMetadata{}))
+	setupModelMetadataTestDB(t)
 
 	first := `{"prompt":{"type":"string"}}`
 	require.NoError(t, UpsertModelMetadata(&ModelMetadata{
@@ -84,9 +96,7 @@ func TestUpsertModelMetadata_SecondWriteUpdatesInPlace(t *testing.T) {
 }
 
 func TestBatchUpsertModelMetadata_WritesAll(t *testing.T) {
-	require.NoError(t, InitDB())
-	defer CloseDB()
-	require.NoError(t, DB.AutoMigrate(&ModelMetadata{}))
+	setupModelMetadataTestDB(t)
 
 	schema := `{"prompt":{"type":"string"}}`
 	batch := []*ModelMetadata{
