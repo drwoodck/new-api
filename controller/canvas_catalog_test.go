@@ -226,7 +226,11 @@ func TestGetCatalogWireFormatContract(t *testing.T) {
 	b := resp.Models[1]
 	assert.Equal(t, []string{"video_gen"}, b.Capabilities)
 	assert.False(t, b.Enabled, "disabled entries must stay in the catalog (soft-offline contract)")
-	assert.Nil(t, b.ParamSchema, "invalid param_schema JSON must degrade to null")
+	// 非法 JSON 必须降级成「没有 schema」:契约上就是 JSON null。注意
+	// jsontext.Value 从 `null` 反序列化出来的是字面量 "null"(长度 4),不是 Go 的
+	// nil —— 两种形态客户端都按 None 处理,断言按语义写,别绑死在某一种内存表示上。
+	assert.True(t, len(b.ParamSchema) == 0 || string(b.ParamSchema) == "null",
+		"invalid param_schema JSON must degrade to JSON null, got %q", string(b.ParamSchema))
 	require.NotNil(t, b.SchemaOverride)
 	assert.JSONEq(t, `{"endpoint_path":"/v1/videos"}`, *b.SchemaOverride)
 }
