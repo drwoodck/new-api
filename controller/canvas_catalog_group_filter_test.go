@@ -1,16 +1,17 @@
 package controller
 
 import (
-	"strings"
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -19,9 +20,10 @@ import (
 )
 
 // setupCatalogGroupFilterTestDB 与 setupCatalogTestDB(canvas_catalog_test.go)同一建库
-// 方式,额外迁移 abilities 表(GetGroupEnabledModels 读的表)。路由前插入一个
-// 中间件,把 constant.ContextKeyUsingGroup 写进 context —— 模拟 TokenAuthReadOnly
-// 已经算好的有效分组,不重新走完整鉴权链路(那需要真实 token/user 记录)。
+// 方式,额外迁移 abilities 与 model_group_prices 表 —— 目录下发现在同时按
+// 「分组可用模型(abilities)」与「该分组配过价(model_group_prices)」收窄。
+// 路由前插入一个中间件,把 constant.ContextKeyUsingGroup 写进 context ——
+// 模拟 TokenAuthReadOnly 已经算好的有效分组,不重新走完整鉴权链路。
 func setupCatalogGroupFilterTestDB(t *testing.T, effectiveGroup string) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -42,10 +44,16 @@ func setupCatalogGroupFilterTestDB(t *testing.T, effectiveGroup string) *gin.Eng
 		}
 	})
 	model.DB = db
-	require.NoError(t, db.AutoMigrate(&model.CanvasCatalogModel{}, &model.Ability{}, &model.Channel{}))
+	require.NoError(t, db.AutoMigrate(
+		&model.CanvasCatalogModel{},
+		&model.Ability{},
+		&model.Channel{},
+		&model.Model{},
+		&model.ModelGroupPrice{},
+		&model.Vendor{},
+	))
 	// GetGroupEnabledModels 是 abilities INNER JOIN channels 且只认 status=1;
-	// 下面各用例的 ability 全部 ChannelId:1,没有这条渠道行就一行都匹配不到 ——
-	// 分组过滤会退化成 fail-open,「不在可用集里」的那条断言必然失败。
+	// 没有这条渠道行就一行都匹配不到 —— 分组过滤会退化成「只按价格判定」。
 	require.NoError(t, db.Create(&model.Channel{
 		Id: 1, Key: "group-filter-key", Status: common.ChannelStatusEnabled,
 		Name: "group-filter-channel",
@@ -62,118 +70,156 @@ func setupCatalogGroupFilterTestDB(t *testing.T, effectiveGroup string) *gin.Eng
 	return router
 }
 
-// TestGetCanvasCatalogMarksGroupVisibilityWithoutTouchingEnabled 端到端锁住
-// 分组过滤的三条不变量,每条都对应一个曾经写错或差点写错的实现:
+func floatPtr(v float64) *float64 { return &v }
+
+func createCatalogModel(t *testing.T, remoteID string) {
+	t.Helper()
+	createCatalogModelEnabled(t, remoteID, true)
+}
+
+func createCatalogModelEnabled(t *testing.T, remoteID string, enabled bool) {
+	t.Helper()
+	require.NoError(t, model.DB.Create(&model.CanvasCatalogModel{
+		RemoteID: remoteID, DisplayName: remoteID, Capabilities: "video_gen",
+		Enabled: boolPtr(enabled), Contract: "c1", RequiresVocab: 1,
+	}).Error)
+}
+
+// createGroupPricedModel 建一个「开了分组分别定价 + 该分组有价」的模型。
 //
-//  1. **不删行** —— 分组打不到的模型必须仍在响应里。abilities 只含已启用能力,
-//     所以任何被分组排除的模型若直接消失,客户端就分不清「这个分组用不了」
-//     与「这个模型被删了」。
-//  2. **不改 enabled** —— 它必须如实反映库里存的值。画布把 enabled 写进本地
-//     models.enabled,而那一列同时是用户自己的勾选开关且同步时无条件覆写;
-//     从目录侧写它会静默清掉用户的选择。
-//  3. **可见性走独立的 group_visible 字段** —— 这才是表达「这个分组能不能用」
-//     的地方。
-func TestGetCanvasCatalogMarksGroupVisibilityWithoutTouchingEnabled(t *testing.T) {
+// 必须同时写 models.group_pricing_enabled=true:目录下发的"有没有价"复用了
+// 计费侧的 hasBillingConfigForUser —— 只有开了分组定价的模型才看分组价格行,
+// 否则走全局 ratio_setting(统一模式)。
+func createGroupPricedModel(t *testing.T, remoteID, group string, price float64) {
+	t.Helper()
+	require.NoError(t, model.DB.Create(&model.Model{
+		ModelName: remoteID, Status: 1, GroupPricingEnabled: true,
+	}).Error)
+	model.RefreshPricing()
+	require.NoError(t, model.DB.Create(&model.ModelGroupPrice{
+		ModelName: remoteID, GroupName: group, ModelPrice: floatPtr(price),
+	}).Error)
+}
+
+func fetchCatalog(t *testing.T, router *gin.Engine) catalogResponse {
+	t.Helper()
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/canvas/catalog", nil)
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp catalogResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	return resp
+}
+
+func catalogIDs(resp catalogResponse) []string {
+	out := make([]string, 0, len(resp.Models))
+	for _, m := range resp.Models {
+		out = append(out, m.RemoteID)
+	}
+	return out
+}
+
+// TestGetCanvasCatalogOnlyDeliversGroupModelsWithGroupPrice 锁住目录下发的两条收窄规则:
+//
+//  1. 只下发调用者所在分组可用的模型(abilities 里有该分组的启用行);
+//  2. 只下发该分组配过价的模型 —— 没配价的模型即便分组可见也不下发,
+//     否则画布会把一个自己分组根本计不了价的模型同步进本地模型表。
+//
+// 分组打不到的模型必须**整条不下发**:画布拿不到条目就不会把它同步进来,
+// 这正是「用户更新模型时不能多出别组的模型」的要求。
+func TestGetCanvasCatalogOnlyDeliversGroupModelsWithGroupPrice(t *testing.T) {
 	router := setupCatalogGroupFilterTestDB(t, "vip")
 
-	model.DB.Create(&model.CanvasCatalogModel{
-		RemoteID: "vip-only", DisplayName: "VIP Only", Capabilities: "video_gen",
-		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1, SortOrder: 1,
-	})
-	model.DB.Create(&model.CanvasCatalogModel{
-		RemoteID: "default-only", DisplayName: "Default Only", Capabilities: "video_gen",
-		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1, SortOrder: 2,
-	})
-	// 运营方自己停用的条目 —— 用来验证 enabled 与 group_visible 是两个独立维度
-	model.DB.Create(&model.CanvasCatalogModel{
-		RemoteID: "vip-retired", DisplayName: "VIP Retired", Capabilities: "video_gen",
-		Enabled: boolPtr(false), Contract: "c1", RequiresVocab: 1, SortOrder: 3,
-	})
-	// abilities: vip 分组能用 vip-only 与 vip-retired
-	model.DB.Create(&model.Ability{Group: "vip", Model: "vip-only", ChannelId: 1, Enabled: true})
-	model.DB.Create(&model.Ability{Group: "vip", Model: "vip-retired", ChannelId: 1, Enabled: true})
-	model.DB.Create(&model.Ability{Group: "default", Model: "default-only", ChannelId: 1, Enabled: true})
+	createCatalogModel(t, "vip-priced")                   // 分组可用 + 有价 → 下发
+	createCatalogModel(t, "vip-unpriced")                 // 分组可用但没价 → 不下发
+	createCatalogModel(t, "other-group")                  // 分组不可用、有价 → 不下发
+	createCatalogModelEnabled(t, "vip-priced-old", false) // 分组可用 + 有价,但运营方已停用 → 仍下发(enabled=false 表达下线)
 
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/canvas/catalog", nil)
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	require.NoError(t, model.DB.Create(&model.Ability{Group: "vip", Model: "vip-priced", ChannelId: 1, Enabled: true}).Error)
+	require.NoError(t, model.DB.Create(&model.Ability{Group: "vip", Model: "vip-unpriced", ChannelId: 1, Enabled: true}).Error)
+	require.NoError(t, model.DB.Create(&model.Ability{Group: "vip", Model: "vip-priced-old", ChannelId: 1, Enabled: true}).Error)
+	require.NoError(t, model.DB.Create(&model.Ability{Group: "default", Model: "other-group", ChannelId: 1, Enabled: true}).Error)
+	createGroupPricedModel(t, "vip-priced", "vip", 1.5)
+	createGroupPricedModel(t, "other-group", "vip", 2)
+	createGroupPricedModel(t, "vip-priced-old", "vip", 0.8)
 
-	var resp catalogResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-
-	// (1) 三行都在
-	require.Len(t, resp.Models, 3, "分组过滤绝不删行")
-
-	byID := make(map[string]canvasCatalogWireModel, len(resp.Models))
-	for _, m := range resp.Models {
-		byID[m.RemoteID] = m
-	}
-	require.Contains(t, byID, "vip-only")
-	require.Contains(t, byID, "default-only")
-	require.Contains(t, byID, "vip-retired")
-
-	// (2) enabled 一律是库里存的值
-	assert.True(t, byID["vip-only"].Enabled, "库里存的是 true")
-	assert.True(t, byID["default-only"].Enabled,
-		"vip 用不了它,但库里存的是 true —— 绝不能因为分组而改写 enabled")
-	assert.False(t, byID["vip-retired"].Enabled, "运营方停用的,库里存的是 false")
-
-	// (3) group_visible 才是分组维度
-	assert.True(t, byID["vip-only"].GroupVisible, "在 vip 的可用集里")
-	assert.False(t, byID["default-only"].GroupVisible, "不在 vip 的可用集里")
-	assert.True(t, byID["vip-retired"].GroupVisible,
-		"在 vip 的可用集里 —— 已停用与分组可见是两个独立维度")
+	resp := fetchCatalog(t, router)
+	assert.ElementsMatch(t, []string{"vip-priced", "vip-priced-old"}, catalogIDs(resp),
+		"只下发「本分组可用 + 本分组有价」的模型")
 }
 
-// TestGetCanvasCatalogEmptyAbilitiesTreatsAllVisible 锁住 fail-open:
-// 分组在 abilities 里查不到任何启用模型时,一律按可见下发。
+// TestGetCanvasCatalogPriceTableDefinesGroupModelsWhenAbilitiesEmpty 覆盖
+// 「分组在 abilities 里没有行」的形态(例如 内部特惠2:只配了价格表,没有能力行):
+// 这时分组模型集合由价格表本身表达 —— 有价的下发,没价的不下发。
 //
-// 为什么这条重要:查询失败与「该分组确实一个模型都不能用」都得到空结果,
-// 但含义相反。若判成「全部不可见」,画布会把每个条目当成已下线、直接从
-// 模型下拉里剔掉 —— 一次瞬时 DB 故障或一处漏配的分组,就让所有客户端的
-// 模型列表整体变空。错误方向应当是「看得到、点了被计费层拦住并给出明确
-// 报错」,不是「模型凭空消失」。
-func TestGetCanvasCatalogEmptyAbilitiesTreatsAllVisible(t *testing.T) {
-	router := setupCatalogGroupFilterTestDB(t, "group-with-no-abilities")
+// 这条不是 fail-open:如果按 abilities 判空就把整份目录发下去,用户会同步到
+// 一堆自己分组根本计不了价的模型,正是本次要禁止的行为。
+func TestGetCanvasCatalogPriceTableDefinesGroupModelsWhenAbilitiesEmpty(t *testing.T) {
+	router := setupCatalogGroupFilterTestDB(t, "group-with-only-prices")
 
-	model.DB.Create(&model.CanvasCatalogModel{
-		RemoteID: "some-model", DisplayName: "Some Model", Capabilities: "video_gen",
-		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1,
-	})
-	// 故意不插任何 abilities 行 —— 模拟分组漏配 / 查询拿到空结果
+	createCatalogModel(t, "priced-only")
+	createCatalogModel(t, "unpriced")
 
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/canvas/catalog", nil)
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	// 统一模式 + 全局有价,但该分组一行价格都没有 —— 没有任何"这个分组有它"的
+	// 信号,不能出现在这个分组的目录里(否则内部特惠2 会凭空多出对话模型)。
+	savedModelPrice := ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedModelPrice)) })
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"unified-elsewhere":0.4}`))
+	createCatalogModel(t, "unified-elsewhere")
 
-	var resp catalogResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.Len(t, resp.Models, 1)
-	assert.True(t, resp.Models[0].GroupVisible,
-		"分组查不到任何启用模型时必须 fail-open,否则客户端模型列表会整体变空")
+	createGroupPricedModel(t, "priced-only", "group-with-only-prices", 3)
+
+	resp := fetchCatalog(t, router)
+	assert.Equal(t, []string{"priced-only"}, catalogIDs(resp))
+	assert.True(t, resp.Models[0].GroupVisible, "价格表表达的分组模型视为可见")
 }
 
-// TestGetCanvasCatalogNoGroupContextTreatsAllVisible 取不到有效分组时(context key
-// 缺省)一律按可见下发。宁可多给也不要因为读不到分组就把整份目录判成不可见 ——
-// 那会让所有客户端的模型列表整体变空,是比漏过滤严重得多的故障。
-func TestGetCanvasCatalogNoGroupContextTreatsAllVisible(t *testing.T) {
+// TestGetCanvasCatalogUnifiedModeModelStaysDeliverable 统一模式(未开分组定价、
+// 价格配在全局 ratio_setting)的模型没有分组价格行,但它对一个分组是真实可计费的
+// —— 必须照常下发。只查分组价格表会把这些模型(线上就是 7 个对话模型)整批
+// 判成"没价"、从画布目录里消失,而直接调用又是通的。
+func TestGetCanvasCatalogUnifiedModeModelStaysDeliverable(t *testing.T) {
+	router := setupCatalogGroupFilterTestDB(t, "vip")
+
+	savedModelPrice := ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedModelPrice)) })
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"unified-priced":0.4}`))
+
+	createCatalogModel(t, "unified-priced")   // 统一模式 + 全局有价 → 下发
+	createCatalogModel(t, "unified-unpriced") // 统一模式 + 全局也没价 → 不下发
+	require.NoError(t, model.DB.Create(&model.Ability{Group: "vip", Model: "unified-priced", ChannelId: 1, Enabled: true}).Error)
+	require.NoError(t, model.DB.Create(&model.Ability{Group: "vip", Model: "unified-unpriced", ChannelId: 1, Enabled: true}).Error)
+
+	resp := fetchCatalog(t, router)
+	assert.Equal(t, []string{"unified-priced"}, catalogIDs(resp),
+		"统一模式模型靠全局价可计费,不能因为缺少分组价格行被滤掉")
+}
+
+// TestGetCanvasCatalogNoGroupContextDeliversAll 取不到有效分组(context key 缺省)时
+// 不做收窄:读不到分组就不该按某个分组去砍目录,那是比漏过滤严重得多的故障。
+func TestGetCanvasCatalogNoGroupContextDeliversAll(t *testing.T) {
 	router := setupCatalogGroupFilterTestDB(t, "")
 
-	model.DB.Create(&model.CanvasCatalogModel{
-		RemoteID: "any-model", DisplayName: "Any", Capabilities: "video_gen",
-		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1,
-	})
-	// 故意不插任何 abilities 行:即便如此也不能把条目判成不可见
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/canvas/catalog", nil)
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	createCatalogModel(t, "any-model")
+	createCatalogModel(t, "another-model")
 
-	var resp catalogResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.Len(t, resp.Models, 1)
-	assert.True(t, resp.Models[0].Enabled)
-	assert.True(t, resp.Models[0].GroupVisible, "无分组信息时按可见处理")
+	resp := fetchCatalog(t, router)
+	assert.ElementsMatch(t, []string{"any-model", "another-model"}, catalogIDs(resp))
+}
+
+// TestGetCanvasCatalogSkipsPriceFilterWhenPriceTableUnreadable 价格表读不出来时
+// 只跳过价格收窄(仍按 abilities 收窄),不能让整份目录变空 —— 把一次 DB 故障
+// 判成「所有模型都没配价」会让所有客户端的模型列表一起消失。
+func TestGetCanvasCatalogSkipsPriceFilterWhenPriceTableUnreadable(t *testing.T) {
+	router := setupCatalogGroupFilterTestDB(t, "vip")
+
+	createCatalogModel(t, "vip-model")
+	require.NoError(t, model.DB.Create(&model.Ability{Group: "vip", Model: "vip-model", ChannelId: 1, Enabled: true}).Error)
+
+	// 制造价格表读取失败:迁移后立刻删表,GetAllModelGroupPrices 必然报错。
+	require.NoError(t, model.DB.Migrator().DropTable(&model.ModelGroupPrice{}))
+
+	resp := fetchCatalog(t, router)
+	assert.Equal(t, []string{"vip-model"}, catalogIDs(resp), "价格表故障时不能把分组内模型全部砍掉")
 }

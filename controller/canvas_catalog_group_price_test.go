@@ -22,6 +22,19 @@ import (
 
 func float64Ptr(f float64) *float64 { return &f }
 
+// markGroupPriced 为「统一模式」的价格用例补一条该分组的价格行。
+//
+// 目录下发现在要求「该分组给这个模型配过价」才会下发该模型,而统一模式的价格
+// 权威在全局配置(模型价/倍率 × GroupRatio),行内数字不参与算价。这些用例
+// 验证的是统一模式下的价格口径,所以只需让模型通过下发闸门 —— 行内价写 0,
+// 明确表示它不是这些断言的价格来源。
+func markGroupPriced(t *testing.T, remoteID, group string) {
+	t.Helper()
+	require.NoError(t, model.DB.Create(&model.ModelGroupPrice{
+		ModelName: remoteID, GroupName: group, ModelPrice: float64Ptr(0),
+	}).Error)
+}
+
 // setupCatalogGroupPriceTestDB 同 canvas_catalog_group_filter_test.go 的
 // setupCatalogGroupFilterTestDB,额外迁移 Model/ModelGroupPrice(分组分别定价
 // 存储)。initModelListColumnNames 仍然必须调 —— GetGroupEnabledModels 用的
@@ -87,6 +100,7 @@ func TestGetCanvasCatalogUnifiedModeGroupPriceIsGlobalTimesGroupRatio(t *testing
 		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1,
 	})
 	model.DB.Create(&model.Ability{Group: "vip", Model: "unified-catalog-model", ChannelId: 1, Enabled: true})
+	markGroupPriced(t, "unified-catalog-model", "vip")
 
 	resp := fetchCanvasCatalog(t, router)
 	require.Len(t, resp.Models, 1)
@@ -119,6 +133,7 @@ func TestGetCanvasCatalogUnifiedModeSecondPriceIsFinalGroupScaledPrice(t *testin
 		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1,
 	})
 	model.DB.Create(&model.Ability{Group: "vip", Model: "unified-second-catalog", ChannelId: 1, Enabled: true})
+	markGroupPriced(t, "unified-second-catalog", "vip")
 
 	resp := fetchCanvasCatalog(t, router)
 	require.Len(t, resp.Models, 1)
@@ -159,9 +174,13 @@ func TestGetCanvasCatalogSeparateModeOnlyReturnsCallersOwnGroupPrice(t *testing.
 	assert.Equal(t, float64(1), price.GroupRatioApplied, "分别定价模式下不叠乘倍率")
 }
 
-// TestGetCanvasCatalogSeparateModeUnconfiguredGroupHasNilPrice 分别定价模式下,
-// 调用者的分组没有配置价格时,group_price 必须是 nil(不可用),不是 0。
-func TestGetCanvasCatalogSeparateModeUnconfiguredGroupHasNilPrice(t *testing.T) {
+// TestGetCanvasCatalogSeparateModeUnconfiguredGroupIsNotDelivered 分别定价模式下,
+// 调用者的分组没有配置价格时,该模型**整条不下发**。
+//
+// 旧契约是"下发条目 + group_price=nil",但那样画布会把一个自己分组根本计不了价
+// 的模型同步进本地模型表 —— 正是本次要禁止的。(group_price=nil 不能是 0 的
+// 规则仍由 TestGetCanvasCatalogNoGroupContextGroupPriceIsNil 覆盖。)
+func TestGetCanvasCatalogSeparateModeUnconfiguredGroupIsNotDelivered(t *testing.T) {
 	router := setupCatalogGroupPriceTestDB(t, "default")
 
 	m := &model.Model{ModelName: "separate-catalog-model-2", Status: 1, GroupPricingEnabled: true}
@@ -178,8 +197,7 @@ func TestGetCanvasCatalogSeparateModeUnconfiguredGroupHasNilPrice(t *testing.T) 
 	model.DB.Create(&model.Ability{Group: "default", Model: "separate-catalog-model-2", ChannelId: 1, Enabled: true})
 
 	resp := fetchCanvasCatalog(t, router)
-	require.Len(t, resp.Models, 1)
-	assert.Nil(t, resp.Models[0].GroupPrice, "没配置价格的分组必须是 nil,不能是 0 或伪造一个价格")
+	require.Empty(t, resp.Models, "没配置价格的分组不能下发该模型")
 }
 
 // TestGetCanvasCatalogNoGroupContextGroupPriceIsNil 取不到有效分组时
@@ -298,6 +316,7 @@ func TestGetCanvasCatalogTierTableBeatsVideoSecondPrice(t *testing.T) {
 		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1,
 	})
 	model.DB.Create(&model.Ability{Group: "default", Model: "ptier-catalog", ChannelId: 1, Enabled: true})
+	markGroupPriced(t, "ptier-catalog", "default")
 
 	resp := fetchCanvasCatalog(t, router)
 	require.Len(t, resp.Models, 1)
@@ -358,6 +377,7 @@ func TestGetCanvasCatalogNoTierTableKeepsLegacyFields(t *testing.T) {
 		Enabled: boolPtr(true), Contract: "c1", RequiresVocab: 1,
 	})
 	model.DB.Create(&model.Ability{Group: "default", Model: "ptier-legacy-catalog", ChannelId: 1, Enabled: true})
+	markGroupPriced(t, "ptier-legacy-catalog", "default")
 
 	resp := fetchCanvasCatalog(t, router)
 	require.Len(t, resp.Models, 1)

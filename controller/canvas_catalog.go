@@ -300,17 +300,14 @@ func GetCanvasCatalog(c *gin.Context) {
 	// 与完整 TokenAuth 同一优先级),这里直接读,不重新查库。
 	effectiveGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 
-	// groupModels 为 nil 表示「没有分组信息」—— 一律按可见下发。
+	// groupModels 表示「该分组在 abilities 里配置过哪些模型」:
+	//   - nil:不按 abilities 收窄。取不到有效分组、abilities 查询失败、或该分组
+	//     在 abilities 里一行都没有(例如 内部特惠2 —— 这类分组的模型集合由
+	//     model_group_prices 的价格行本身表达)。
+	//   - 非 nil:该分组确实配置了模型,目录只下发其中的模型。
 	//
-	// 三种情况都必须落到 nil(fail-open),而不是空集合:
-	//   1. 取不到有效分组(context key 缺省)
-	//   2. abilities 查询失败 —— **这一条是关键**。查询失败与「该分组确实
-	//      一个模型都不能用」都会得到空结果,但含义相反。判成空集合会让
-	//      每个条目 group_visible=false,而画布把它当「已下线」直接从模型
-	//      下拉里剔掉 —— 一次瞬时 DB 故障就让所有客户端的模型列表变空。
-	//      宁可多给(用户点了在计费层被拦)也不要整体变空。
-	//
-	// 只有查询**成功且返回了非空集合**时才收窄可见性。
+	// 查询失败仍然落 nil(fail-open):一次瞬时 DB 故障不该让整份目录变空,
+	// 此时还有下面的价格过滤兜底。
 	var groupModels map[string]struct{}
 	if effectiveGroup != "" {
 		// 无缓存的直接 DB 查询,但 abilities 复合主键以 Group 为首列,
@@ -319,13 +316,10 @@ func GetCanvasCatalog(c *gin.Context) {
 		switch {
 		case err != nil:
 			common.SysError(fmt.Sprintf(
-				"读取分组 %s 的可用模型失败,本次目录按全部可见下发: %v", effectiveGroup, err))
+				"读取分组 %s 的可用模型失败,本次目录不按 abilities 收窄: %v", effectiveGroup, err))
 		case len(enabled) == 0:
-			// 空结果在查询成功的前提下是真实状态,但同样按可见处理 ——
-			// 分组配置漏了会让用户什么都看不到,而错误方向应当是「看得到、
-			// 点了被计费层拦住并给出明确报错」,不是「模型凭空消失」。
 			common.SysLog(fmt.Sprintf(
-				"分组 %s 在 abilities 里没有任何启用模型,本次目录按全部可见下发", effectiveGroup))
+				"分组 %s 在 abilities 里没有任何启用模型,本次目录按分组价格表判定分组模型", effectiveGroup))
 		default:
 			groupModels = make(map[string]struct{}, len(enabled))
 			for _, name := range enabled {
@@ -341,11 +335,29 @@ func GetCanvasCatalog(c *gin.Context) {
 		return
 	}
 
+	// 预载全部分组价格行(分别定价模式的逐分组价),目录下发循环零逐条点查。
+	// 查询失败时不再把「查不到价」当成「没配价」——那样会把整份目录判成未定价、
+	// 让所有客户端的模型列表变空。这时按 fail-open 跳过价格过滤并记 SysError。
+	allGroupPrices, err := model.GetAllModelGroupPrices()
+	priceFilterAvailable := true
+	if err != nil {
+		common.SysError(fmt.Sprintf("读取分组价格失败,本次目录不按价格收窄: %v", err))
+		allGroupPrices = map[string]map[string]model.ModelGroupPrice{}
+		priceFilterAvailable = false
+	}
+
+	// 目录下发范围(用户要求):只给「调用者所在分组」且「该分组配过价」的模型。
+	// 其余模型整条不下发 —— 画布侧拿不到条目,也就不会把它们同步进本地模型表。
+	delivered := rows
+	if effectiveGroup != "" && priceFilterAvailable {
+		delivered = filterCatalogForGroup(rows, effectiveGroup, groupModels, allGroupPrices)
+	}
+
 	// 批量取 models 表说明和显示名称;查询失败按 fail-open 处理(回退目录存量文字),
 	// 不让一次 meta 查询故障弄垮整份目录 —— 与分组可见性的 fail-open 同原则。
-	remoteIDs := make([]string, 0, len(rows))
-	for i := range rows {
-		remoteIDs = append(remoteIDs, rows[i].RemoteID)
+	remoteIDs := make([]string, 0, len(delivered))
+	for i := range delivered {
+		remoteIDs = append(remoteIDs, delivered[i].RemoteID)
 	}
 	metaDescriptions, err := model.GetModelMetaDescriptionMap(remoteIDs)
 	if err != nil {
@@ -358,24 +370,12 @@ func GetCanvasCatalog(c *gin.Context) {
 		metaDisplayNames = map[string]string{}
 	}
 
-	// 分组过滤后的可见 ID 列表（只查询该分组可见模型的元数据）
-	visibleRemoteIDs := filterVisibleRemoteIDs(remoteIDs, groupModels)
-
-	// 预载元数据
-	metadataMap, err := model.GetModelMetadataMap(visibleRemoteIDs)
+	// 预载元数据(只下发范围内的模型)
+	metadataMap, err := model.GetModelMetadataMap(remoteIDs)
 	if err != nil {
 		// Fail-open: 查询失败按空 map 处理，不影响目录下发
 		common.SysLog(fmt.Sprintf("GetModelMetadataMap failed: %v", err))
 		metadataMap = make(map[string]*model.ModelMetadata)
-	}
-
-	// 预载全部分组价格行(分别定价模式的逐分组价),目录下发循环零逐条点查 ——
-	// 与 metaDescriptions 同一 fail-open 约定:查询失败按空处理(SysError),
-	// 让下游自然回落「无行 = 分组不可用 / 未定价」,不让一次查询故障弄垮整份目录。
-	allGroupPrices, err := model.GetAllModelGroupPrices()
-	if err != nil {
-		common.SysError(fmt.Sprintf("读取分组价格失败,目录价格按未配置处理: %v", err))
-		allGroupPrices = map[string]map[string]model.ModelGroupPrice{}
 	}
 
 	baseURL := os.Getenv("RELAY_BASE_URL")
@@ -383,9 +383,9 @@ func GetCanvasCatalog(c *gin.Context) {
 		baseURL = "https://your-relay.com"
 	}
 
-	models := make([]canvasCatalogWireModel, 0, len(rows))
-	for i := range rows {
-		models = append(models, toWireModel(&rows[i], groupModels, effectiveGroup, metaDescriptions, metaDisplayNames, metadataMap, allGroupPrices[rows[i].RemoteID]))
+	models := make([]canvasCatalogWireModel, 0, len(delivered))
+	for i := range delivered {
+		models = append(models, toWireModel(&delivered[i], groupModels, effectiveGroup, metaDescriptions, metaDisplayNames, metadataMap, allGroupPrices[delivered[i].RemoteID]))
 	}
 
 	response := gin.H{
@@ -452,17 +452,40 @@ func etagMatchesWeak(ifNoneMatch, etag string) bool {
 	return false
 }
 
-// filterVisibleRemoteIDs 返回该分组可见的 remote_id 子集
-// groupModels 为 nil 时表示无分组信息 → Fail-open，全部可见
-func filterVisibleRemoteIDs(allIDs []string, groupModels map[string]struct{}) []string {
-	if groupModels == nil {
-		return allIDs
-	}
-	visible := make([]string, 0, len(allIDs))
-	for _, id := range allIDs {
-		if _, ok := groupModels[id]; ok {
-			visible = append(visible, id)
+// filterCatalogForGroup 按「调用者所在分组 + 该分组可计费」收窄目录。
+//
+// 两条规则来自同一个要求:画布用户只应该同步到自己在用的分组、且自己分组
+// 配过价的模型;其余模型整条不下发。
+//
+//  1. 分组模型集合:该分组在 abilities 里配置过模型时(groupModels != nil),
+//     模型必须在集合里 —— abilities 是分组可用性的权威。该分组在 abilities
+//     里一行都没有时(如 内部特惠2,只配了价格表),分组模型集合由**该分组的
+//     价格行**表达:统一模式的模型虽然全局有价,但没有任何"这个分组有它"的
+//     信号,不能凭空出现在这个分组的目录里。
+//  2. 「有没有价」必须与计费路径同口径,复用 hasBillingConfigForUser:
+//     开了分组分别定价的模型看分组价格行,统一模式的模型看全局 ratio_setting。
+//     只查分组价格表会把统一模式模型(如对话模型)整批判成"没价"——它们没有
+//     分组价格行,于是从画布目录里消失,而直接调用其实又是通的。
+//
+// group 为空(取不到有效分组)时由调用方跳过本函数,保持 fail-open。
+func filterCatalogForGroup(rows []model.CanvasCatalogModel, group string, groupModels map[string]struct{}, allGroupPrices map[string]map[string]model.ModelGroupPrice) []model.CanvasCatalogModel {
+	groupList := []string{group}
+	loadGroupPrices := func() map[string]map[string]model.ModelGroupPrice { return allGroupPrices }
+	delivered := make([]model.CanvasCatalogModel, 0, len(rows))
+	for i := range rows {
+		remoteID := rows[i].RemoteID
+		if groupModels != nil {
+			if _, ok := groupModels[remoteID]; !ok {
+				continue
+			}
+		} else if _, ok := allGroupPrices[remoteID][group]; !ok {
+			// 分组没有 abilities 行时,价格行本身就是「这个分组有哪些模型」的依据。
+			continue
 		}
+		if !hasBillingConfigForUser(remoteID, groupList, loadGroupPrices) {
+			continue
+		}
+		delivered = append(delivered, rows[i])
 	}
-	return visible
+	return delivered
 }
