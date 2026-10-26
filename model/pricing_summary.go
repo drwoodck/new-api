@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/types"
 )
 
@@ -67,8 +68,16 @@ func GeneratePricingSummaryPreloaded(modelName, groupName string, groupPricingEn
 		// 2) 秒价(行内为终价;统一模式为原价 —— 统一模式文案不带倍率,
 		//    与 /api/pricing 的 VideoSecondPrice 展示口径一致)。
 		parts = append(parts, fmt.Sprintf("$%s/秒", formatPrice(secondPrice)))
+	} else if expr, ok := billing_setting.GetBillingExpr(modelName); ok &&
+		billing_setting.GetBillingMode(modelName) == billing_setting.BillingModeTieredExpr &&
+		strings.TrimSpace(expr) != "" {
+		// 3) 阶梯表达式计费:价格由表达式按请求参数(p/c/cr/len…)现算,没有单一
+		//    标价可列。这里必须给一句人话文案,不能落到 "未定价" —— 画布把
+		//    "未定价" 当「没有价格信息」,会把整条模型从列表里藏掉
+		//    (2026-10-26:gpt-6.1-sol / grok-4.7 就是这么消失的)。
+		parts = append(parts, "阶梯表达式计费")
 	} else if groupPricingEnabled {
-		// 3) 分别定价:行内标量(ResolveGroupPriceFromRow)。
+		// 4) 分别定价:行内标量(ResolveGroupPriceFromRow)。
 		resolved := ResolveGroupPriceFromRow(row)
 		if !resolved.Available {
 			return pricingUnavailable

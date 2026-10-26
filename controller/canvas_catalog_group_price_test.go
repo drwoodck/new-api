@@ -114,8 +114,8 @@ func TestGetCanvasCatalogUnifiedModeGroupPriceIsGlobalTimesGroupRatio(t *testing
 // TestGetCanvasCatalogUnifiedModeSecondPriceIsFinalGroupScaledPrice 统一模式秒价
 // 口径修复(2026-09-04 spec 3.3):目录下发**已乘分组倍率的终价**,与档表/按次
 // 同口径 —— 旧版下发原价 + 分离倍率,固定 ratio=1 的客户端会按原价估算而低估
-// (全局 0.1 × vip 3.0 实收 0.3,客户端却按 0.1 估)。ModelPrice 与
-// VideoSecondPrice 都指向终价 0.3,客户端直接拿来用,不再叠乘 GroupRatioApplied。
+// (全局 0.1 × vip 3.0 实收 0.3,客户端却按 0.1 估)。VideoSecondPrice 指向终价 0.3,
+// 客户端直接拿来用,不再叠乘 GroupRatioApplied;ModelPrice 不再镜像秒价(见下)。
 func TestGetCanvasCatalogUnifiedModeSecondPriceIsFinalGroupScaledPrice(t *testing.T) {
 	router := setupCatalogGroupPriceTestDB(t, "vip")
 
@@ -140,7 +140,9 @@ func TestGetCanvasCatalogUnifiedModeSecondPriceIsFinalGroupScaledPrice(t *testin
 	price := resp.Models[0].GroupPrice
 	require.NotNil(t, price)
 	require.NotNil(t, price.VideoSecondPrice)
-	assert.InDelta(t, 0.3, price.ModelPrice, 1e-9, "终价口径:全局秒价 0.1 × vip 倍率 3.0 = 0.3")
+	// ModelPrice 是「按次固定价」;秒价只走 VideoSecondPrice,否则只读
+	// ModelPrice 的客户端会把按秒计费的模型显示成「/次」(2026-10-26 修)。
+	assert.Zero(t, price.ModelPrice, "秒价不得塞进按次价字段")
 	assert.InDelta(t, 0.3, *price.VideoSecondPrice, 1e-9, "VideoSecondPrice 必须指向终价 0.3,不再是原价 0.1")
 	assert.Equal(t, float64(3), price.GroupRatioApplied, "倍率仍单独上报(供客户端追溯最终价如何得出)")
 	assert.Equal(t, 1, price.QuotaType)
@@ -287,7 +289,7 @@ func TestGetCanvasCatalogSeparateModeRowSecondPriceDispatched(t *testing.T) {
 	require.NotNil(t, price)
 	require.NotNil(t, price.VideoSecondPrice)
 	assert.Equal(t, 0.2, *price.VideoSecondPrice, "必须下发调用者分组的行内秒价,不是全局 0.1 也不是其它分组的 9.99")
-	assert.Equal(t, 0.2, price.ModelPrice)
+	assert.Zero(t, price.ModelPrice, "行内秒价只走 VideoSecondPrice,ModelPrice 保持 0")
 	assert.Equal(t, 1, price.QuotaType)
 	assert.Equal(t, float64(1), price.GroupRatioApplied, "行内秒价是终价,GroupRatioApplied 恒 1")
 }

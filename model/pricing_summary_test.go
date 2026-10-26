@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 )
@@ -171,4 +172,27 @@ func TestGeneratePricingSummarySmoke(t *testing.T) {
 
 	got := GeneratePricingSummary("sum-gp-row", "vip")
 	assert.Equal(t, "$0.02/次", got)
+}
+
+// TestGeneratePricingSummaryTieredExprIsNotUnpriced 阶梯表达式计费的模型必须给出
+// 人话文案,不能落成「未定价」—— 画布把「未定价」当「没有价格信息」,会把整条
+// 模型从列表里藏掉(gpt-6.1-sol / grok-4.7 在 2026-10-26 就是这么消失的)。
+func TestGeneratePricingSummaryTieredExprIsNotUnpriced(t *testing.T) {
+	restoreRatioSettings(t)
+
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() { require.NoError(t, config.GlobalConfig.LoadFromDB(saved)) })
+
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode": `{"expr-only-model":"tiered_expr"}`,
+		"billing_setting.billing_expr": `{"expr-only-model":"tier(\"short\", p * 0.9625 + c * 4.8125)"}`,
+	}))
+
+	got := GeneratePricingSummaryPreloaded("expr-only-model", "default", false, nil)
+	assert.Equal(t, "阶梯表达式计费", got)
+	assert.NotEqual(t, pricingUnavailable, got, "阶梯表达式不能落成未定价,否则画布隐藏整条模型")
 }

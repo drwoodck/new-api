@@ -156,10 +156,12 @@ func resolveCanvasGroupPrice(remoteID, group string, groupPrices map[string]mode
 			// 该分组没有价格行 = 分组不可用(与计费侧同判),不下发价格。
 			return nil
 		}
-		if secondPrice, ok := model.ResolveVideoSecondPriceForGroup(remoteID, group, true, &row); ok {
+		if _, ok := model.ResolveVideoSecondPriceForGroup(remoteID, group, true, &row); ok {
+			// 只填 VideoSecondPrice,别把秒价再塞进 ModelPrice —— 后者在契约里是
+			// 「按次/按量固定价」,填秒价会让只读 ModelPrice 的客户端(以及旧版画布)
+			// 把按秒计费的模型显示成「$x/次」。2026-10-26 修。
 			return &canvasGroupPrice{
 				QuotaType:         1,
-				ModelPrice:        secondPrice,
 				VideoSecondPrice:  row.VideoSecondPrice,
 				GroupRatioApplied: 1,
 			}
@@ -182,9 +184,9 @@ func resolveCanvasGroupPrice(remoteID, group string, groupPrices map[string]mode
 	if secondPrice, ok := ratio_setting.GetVideoSecondPrice(remoteID); ok {
 		groupRatio := ratio_setting.GetGroupRatio(group)
 		finalPrice := secondPrice * groupRatio
+		// 同上:秒价只走 VideoSecondPrice,ModelPrice 留 0(= 没有按次价)。
 		return &canvasGroupPrice{
 			QuotaType:         1,
-			ModelPrice:        finalPrice,
 			VideoSecondPrice:  &finalPrice,
 			GroupRatioApplied: groupRatio,
 		}
