@@ -132,6 +132,14 @@ func resolveCanvasGroupPrice(remoteID, group string, groupPrices map[string]mode
 	if group == "" {
 		return nil
 	}
+	// 阶梯表达式计费的模型没有单一标价:价格由表达式按上下文长度/缓存/图片等
+	// 维度现算。这类模型的 models.model_ratio 只是个与计费无关的占位值(线上是
+	// 37.5),照它下发分组价,画布会显示「$75/M 输入 · $150/M 输出」—— 一个任何
+	// 用户都不会被收取的价格。宁可不下发,让画布回退到 pricing 文案
+	// (DescribeBillingExpr 生成的阶梯说明,或管理员手填的说明)。
+	if model.UsesTieredExprBilling(remoteID) {
+		return nil
+	}
 	groupPricingEnabled := model.IsGroupPricingEnabled(remoteID)
 	// 档位计费最优先：模型配了档表(全局或行内)时下发档表(原价)。
 	// 与 ModelPriceHelperPerCall 的档位分支同序 —— 优先级矩阵见
