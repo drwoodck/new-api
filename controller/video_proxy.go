@@ -103,7 +103,8 @@ func VideoProxy(c *gin.Context) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+	// 只给「建连 + 拿到响应头」设上限;整条 body 不设总时长(见下方流式拷贝)。
+	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "", nil)
 	if err != nil {
@@ -184,7 +185,28 @@ func VideoProxy(c *gin.Context) {
 		return
 	}
 
-	resp, err := client.Do(req)
+	// 抖音/TOS 这类 CDN 封 Go 的 TLS 指纹:同一 IP、同一 URL、同样的头,curl(OpenSSL)
+	// 200 而 Go 一律 403(openresty `Forbid_code: 020200` / "ERROR: ACCESS DENIED"),
+	// 而厂商的结果链接基本都是 307/302 跳到这类 CDN —— 让中转站代取必然失败
+	// (线上 7 天 1507 次 /content 请求,0 次成功)。
+	//
+	// 所以这里**不跟随跳转**,把 Location 原样 302 给客户端:客户端用自己的 TLS 栈
+	// 直连 CDN(实测 reqwest/schannel 200、8.6 MB/s),既绕开指纹封禁,中转站也不用
+	// 转发几十 MB 的流量。真正需要中转站带 key 去取的(OpenAI /content、Gemini、
+	// x-goog-api-key)拿到的本来就是 200 + 字节,走下面的流式分支。
+	noRedirectClient := *client
+	noRedirectClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	// 客户端的 Range 原样转发:大文件断点续传要它。
+	if rng := c.GetHeader("Range"); rng != "" {
+		req.Header.Set("Range", rng)
+	}
+
+	headerTimer := time.AfterFunc(videoUpstreamHeaderTimeout, cancel)
+	resp, err := noRedirectClient.Do(req)
+	headerTimer.Stop()
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to fetch video from %s: %s", videoURL, err.Error()))
 		videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to fetch video content")
@@ -192,7 +214,21 @@ func VideoProxy(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if location, ok := videoRedirectLocation(videoURL, resp); ok {
+		// 上游一句 302 就能把客户端引向内网地址,跳转目标必须同样过 SSRF 校验。
+		if locationErr := validateVideoFetchURL(location, proxy); locationErr != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Upstream redirect target blocked for task %s: %v", taskID, locationErr))
+			videoProxyError(c, http.StatusBadGateway, "server_error", "Upstream redirect target blocked")
+			return
+		}
+		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Video source redirects for task %s, handing URL to client: %s", taskID, location))
+		// 临时签名链接,不能让任何一层缓存住。
+		c.Header("Cache-Control", "no-store")
+		c.Redirect(http.StatusFound, location)
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Upstream returned status %d for %s", resp.StatusCode, videoURL))
 		videoProxyError(c, http.StatusBadGateway, "server_error",
 			fmt.Sprintf("Upstream service returned status %d", resp.StatusCode))
@@ -200,6 +236,10 @@ func VideoProxy(c *gin.Context) {
 	}
 
 	for key, values := range resp.Header {
+		// 逐跳头不能转发:它们描述的是「上游那一段连接」,不是这条连接。
+		if strings.EqualFold(key, "Transfer-Encoding") || strings.EqualFold(key, "Connection") {
+			continue
+		}
 		for _, value := range values {
 			c.Writer.Header().Add(key, value)
 		}
@@ -207,9 +247,75 @@ func VideoProxy(c *gin.Context) {
 
 	c.Writer.Header().Set("Cache-Control", "public, max-age=86400")
 	c.Writer.WriteHeader(resp.StatusCode)
-	if _, err = io.Copy(c.Writer, resp.Body); err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to stream video content: %s", err.Error()))
+	flush := func() {
+		if f, ok := c.Writer.(http.Flusher); ok {
+			f.Flush()
+		}
 	}
+	flush()
+
+	// 空闲看门狗:连续 videoUpstreamIdleTimeout 没有任何字节进展才判定卡死。
+	// 「慢但一直在走」的下载不再受总时长限制 —— 旧实现给整条 body 套了 60s 的
+	// ctx,40 MB 的片子只要低于约 680 KB/s 就必然被拦腰掐断。
+	idle := time.AfterFunc(videoUpstreamIdleTimeout, cancel)
+	defer idle.Stop()
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			idle.Reset(videoUpstreamIdleTimeout)
+			if _, writeErr := c.Writer.Write(buf[:n]); writeErr != nil {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to stream video content for task %s: %s", taskID, writeErr.Error()))
+				return
+			}
+			flush()
+		}
+		if readErr != nil {
+			if readErr != io.EOF {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to stream video content for task %s: %s", taskID, readErr.Error()))
+			}
+			return
+		}
+	}
+}
+
+const (
+	// 上游响应头等待上限:建连/排队超过这么久就判定失败(而不是像以前那样把
+	// 「等头」和「读完 body」共用一个 60s 预算)。
+	videoUpstreamHeaderTimeout = 60 * time.Second
+	// body 空闲上限:连续这么久没有任何字节进展才判定卡死。
+	videoUpstreamIdleTimeout = 120 * time.Second
+)
+
+// videoRedirectLocation 判断上游响应是不是「结果直链的跳转」,是则解析出绝对地址。
+// 只认带 Location 的 3xx。客户端自己发 Range 时也可以用:Range 是普通头,客户端
+// 跟随 302 时会一并带给 CDN。
+func videoRedirectLocation(baseURL string, resp *http.Response) (string, bool) {
+	if resp == nil || resp.StatusCode < 300 || resp.StatusCode >= 400 {
+		return "", false
+	}
+	loc := strings.TrimSpace(resp.Header.Get("Location"))
+	if loc == "" {
+		return "", false
+	}
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return "", false
+	}
+	ref, err := url.Parse(loc)
+	if err != nil {
+		return "", false
+	}
+	return base.ResolveReference(ref).String(), true
+}
+
+// validateVideoFetchURL 对「即将被访问的地址」做 SSRF 校验。
+func validateVideoFetchURL(target, proxy string) error {
+	if proxy == "" {
+		return service.ValidateSSRFProtectedFetchURL(target)
+	}
+	fetchSetting := system_setting.GetFetchSetting()
+	return common.ValidateURLWithFetchSetting(target, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain)
 }
 
 // artifactContentTypes 是 service.artifactExtByType 的反向映射。
