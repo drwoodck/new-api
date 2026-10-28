@@ -240,9 +240,9 @@ func TestDescribeBillingExpr(t *testing.T) {
 
 	cache, ok := DescribeBillingExpr("expr-cache")
 	assert.True(t, ok)
+	// 多档(上下文阶梯)只列输入/输出:阶梯行已经很长,缓存维度留给单档模型。
 	assert.Equal(t,
-		"上下文≤200K（输入$3/M 输出$15/M 缓存命中$0.3/M 缓存写入$3.75/M）；"+
-			"其余（输入$6/M 输出$22.5/M 缓存命中$0.6/M 缓存写入$7.5/M）",
+		"上下文≤200K（输入$3/M 输出$15/M）；其余（输入$6/M 输出$22.5/M）",
 		cache)
 
 	image, ok := DescribeBillingExpr("expr-image")

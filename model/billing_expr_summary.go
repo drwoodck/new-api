@@ -103,6 +103,15 @@ func DescribeBillingExpr(modelName string) (string, bool) {
 		if !ok || len(prices) == 0 {
 			return "", false
 		}
+		// 多档(上下文阶梯)只列输入/输出:阶梯说明本来就已经很长,再挂上
+		// 缓存读/缓存写会让画布那一行彻底看不清,而用户比价只看输入/输出两列。
+		// 单档表达式(图片/多模态)保留全部维度 —— 那里缓存与图片就是价格主体。
+		if len(branches) > 1 {
+			prices = billingExprPrimaryPrices(prices)
+			if len(prices) == 0 {
+				return "", false
+			}
+		}
 		if branch.Label == "" {
 			parts = append(parts, strings.Join(prices, " "))
 			continue
@@ -117,6 +126,18 @@ func DescribeBillingExpr(modelName string) (string, bool) {
 		summary += "（部分请求另有倍率）"
 	}
 	return summary, true
+}
+
+// billingExprPrimaryPrices 只留「输入」「输出」两项(阶梯说明的紧凑形态)。
+// 一个维度都没有时返回空切片,由调用方回退到完整列表。
+func billingExprPrimaryPrices(prices []string) []string {
+	kept := make([]string, 0, 2)
+	for _, price := range prices {
+		if strings.HasPrefix(price, "输入$") || strings.HasPrefix(price, "输出$") {
+			kept = append(kept, price)
+		}
+	}
+	return kept
 }
 
 // billingExprUsesRequestProbe 判断表达式是否引用了请求级探测函数。
