@@ -54,6 +54,13 @@ const (
 	RelayModeResponsesCompact
 
 	RelayModeAlphaSearch
+
+	// 异步生图：提交走 POST /v1/images/generations?async=true，
+	// 查询走 GET /v1/images/{task_id}（形状对齐画布已内置的
+	// img_async_newapi 契约：task_id + status + data[].url）。
+	RelayModeImageSubmit
+
+	RelayModeImageFetchByID
 )
 
 func Path2RelayMode(path string) int {

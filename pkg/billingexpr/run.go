@@ -55,16 +55,17 @@ func runProgram(prog *vm.Program, requestRules []RequestRuleTrace, params TokenP
 	headers := normalizeHeaders(request.Headers)
 
 	env := map[string]interface{}{
-		"p":     params.P,
-		"c":     params.C,
-		"len":   params.Len,
-		"cr":    params.CR,
-		"cc":    params.CC,
-		"cc1h":  params.CC1h,
-		"img":   params.Img,
-		"img_o": params.ImgO,
-		"ai":    params.AI,
-		"ao":    params.AO,
+		"p":      params.P,
+		"c":      params.C,
+		"len":    params.Len,
+		"cr":     params.CR,
+		"cc":     params.CC,
+		"cc1h":   params.CC1h,
+		"img":    params.Img,
+		"img_cr": params.ImgCR,
+		"img_o":  params.ImgO,
+		"ai":     params.AI,
+		"ao":     params.AO,
 		"tier": func(name string, value float64) float64 {
 			trace.MatchedTier = name
 			trace.Cost = value

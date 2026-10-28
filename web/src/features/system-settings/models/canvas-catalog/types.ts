@@ -82,10 +82,21 @@ export type CanvasCatalogModelMeta = {
 
 export type CanvasCatalogOverviewGroupPrice = {
   group_name: string
+  /**
+   * 这一行的价格来自哪条计费路径，展示必须按它分支：
+   * per_call 按次固定价 / tier_table 档表 / ratio 按 token 倍率 /
+   * tiered_expr 表达式计费（价格不在任何价格表里）。空 = 未定价。
+   */
+  billing_mode?: string
   quota_type: number
   // null = 分别定价模式下这个分组没配置价格(不可用)。区分 null 与 0 ——
   // 0 是"这个分组免费",null 是"没配置",两者语义不同,渲染时不能混用。
   price: number | null
   // 档位计费的档表。非空时该分组的计费以档表为准，展示"档表 ×N"徽章。
   price_tiers?: PriceTier[] | null
+  /** 表达式计费的原文（billing_mode=tiered_expr 时有值）。 */
+  billing_expr?: string
+  /** 按 token 倍率折算出的每百万 token 美元价（billing_mode=ratio 时有值）。 */
+  input_price_per_m?: number
+  output_price_per_m?: number
 }

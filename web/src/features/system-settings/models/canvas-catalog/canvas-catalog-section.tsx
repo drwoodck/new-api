@@ -46,9 +46,9 @@ import { getCanvasCatalogModel } from './api'
 import { CanvasCatalogFormDialog } from './components/canvas-catalog-form-dialog'
 import {
   CanvasCatalogOverviewTable,
-  formatOverviewGroupPrice,
   formatOverviewStatus,
 } from './components/canvas-catalog-overview-table'
+import { formatOverviewGroupPrice } from './lib/overview-price-format'
 import {
   matchesOverviewStatusFilter,
   type CatalogStatusFilter,

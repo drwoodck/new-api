@@ -34,6 +34,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/sub2api"
 	"github.com/QuantumNous/new-api/relay/channel/submodel"
 	taskali "github.com/QuantumNous/new-api/relay/channel/task/ali"
+	"github.com/QuantumNous/new-api/relay/channel/task/asyncimage"
 	taskdoubao "github.com/QuantumNous/new-api/relay/channel/task/doubao"
 	taskGemini "github.com/QuantumNous/new-api/relay/channel/task/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/task/hailuo"
@@ -50,6 +51,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/xunfei"
 	"github.com/QuantumNous/new-api/relay/channel/zhipu"
 	"github.com/QuantumNous/new-api/relay/channel/zhipu_4v"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/gin-gonic/gin"
 )
 
@@ -133,7 +135,22 @@ func GetAdaptor(apiType int) channel.Adaptor {
 	return nil
 }
 
+// GetTaskPlatform decides which task adaptor family handles this request.
+//
+// Async image submissions are dispatched by the channel's configured upstream
+// (base URL / channels.settings.async_image_provider[_models]) instead of its
+// channel type: those upstreams are OpenAI-compatible gateways (type 1), so the
+// channel type alone would route them to the Sora video adaptor.
+//
+// When an async image submission resolves to no upstream, RelayTaskSubmit
+// rejects it explicitly (ensureAsyncImagePlatform) rather than letting this
+// function fall back to the channel type.
 func GetTaskPlatform(c *gin.Context) constant.TaskPlatform {
+	if c.GetInt("relay_mode") == relayconstant.RelayModeImageSubmit {
+		if platform, found := AsyncImagePlatformForRequest(c); found {
+			return platform
+		}
+	}
 	channelType := c.GetInt("channel_type")
 	if channelType > 0 {
 		return constant.TaskPlatform(strconv.Itoa(channelType))
@@ -147,6 +164,12 @@ func GetTaskAdaptor(platform constant.TaskPlatform) channel.TaskAdaptor {
 	//	return &aiproxy.Adaptor{}
 	case constant.TaskPlatformSuno:
 		return &suno.TaskAdaptor{}
+	case constant.TaskPlatformToapisImage:
+		return &asyncimage.ToapisAdaptor{}
+	case constant.TaskPlatformToapisMJImage:
+		return &asyncimage.ToapisMJAdaptor{}
+	case constant.TaskPlatformRightapiImage:
+		return &asyncimage.RightapiAdaptor{}
 	}
 	if channelType, err := strconv.ParseInt(string(platform), 10, 64); err == nil {
 		switch channelType {

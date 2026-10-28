@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -231,12 +232,26 @@ type canvasCatalogOverviewRow struct {
 }
 
 type canvasCatalogOverviewGroupPrice struct {
-	GroupName string   `json:"group_name"`
-	QuotaType int      `json:"quota_type"`
-	Price     *float64 `json:"price"`
+	GroupName string `json:"group_name"`
+	// BillingMode 说明这一行的价格来自哪条计费路径，前端据此决定怎么显示：
+	//   per_call     按次固定价（models.model_price 或分组价行的 model_price）
+	//   tier_table   档位计费（price_tiers）
+	//   ratio        按 token 倍率（model_ratio / completion_ratio）
+	//   tiered_expr  表达式计费（billing_setting.billing_mode = tiered_expr）
+	// 空 = 未定价。
+	BillingMode string   `json:"billing_mode"`
+	QuotaType   int      `json:"quota_type"`
+	Price       *float64 `json:"price"`
 	// PriceTiers 档位计费的档表（原价）。非 nil 时该分组的计费以档表为准，
 	// 展示层据此显示"档表 ×N"徽章而非单值价格。
 	PriceTiers *types.PriceTierList `json:"price_tiers,omitempty"`
+	// BillingExpr 表达式计费的原文（BillingMode=tiered_expr 时有值）。
+	// 表达式与分组无关（分组只影响结算时的倍率），所以每个分组行都带同一份。
+	BillingExpr string `json:"billing_expr,omitempty"`
+	// InputPricePerM / OutputPricePerM 是按 token 倍率折算出的「每百万 token
+	// 美元价」，让总览显示真实金额而不是裸倍率。仅 BillingMode=ratio 时有值。
+	InputPricePerM  *float64 `json:"input_price_per_m,omitempty"`
+	OutputPricePerM *float64 `json:"output_price_per_m,omitempty"`
 }
 
 // buildOverviewGroupPrices 对一个模型算出它在**全部**已知分组上的价格。
@@ -250,11 +265,24 @@ func buildOverviewGroupPrices(
 	groupNames []string,
 ) []canvasCatalogOverviewGroupPrice {
 	out := make([]canvasCatalogOverviewGroupPrice, 0, len(groupNames))
+	// 表达式计费：价格既不在 models 表也不在分组价表里，四条价格来源全空。
+	// 表达式本身与分组无关（分组只影响结算倍率），所以每个分组行都带上它。
+	tieredExpr := ""
+	if billing_setting.GetBillingMode(modelName) == billing_setting.BillingModeTieredExpr {
+		tieredExpr, _ = billing_setting.GetBillingExpr(modelName)
+	}
 	for _, groupName := range groupNames {
 		row := canvasCatalogOverviewGroupPrice{GroupName: groupName}
+		if tieredExpr != "" {
+			row.BillingMode = billing_setting.BillingModeTieredExpr
+			row.BillingExpr = tieredExpr
+			out = append(out, row)
+			continue
+		}
 		// 档位计费优先：模型(对该分组)配了档表时，总览以档表为准展示。
 		if tierTable := model.ResolveGroupTierTableFromPreloaded(modelName, groupName, groupPricingEnabled, groupPrices); tierTable != nil {
 			row.QuotaType = 1
+			row.BillingMode = "tier_table"
 			row.PriceTiers = tierTable.PriceTiers
 			out = append(out, row)
 			continue
@@ -264,10 +292,22 @@ func buildOverviewGroupPrices(
 		if resolved.Available {
 			price := resolved.ModelPrice
 			if resolved.QuotaType == 0 {
-				// 按 token 倍率计费没有一个"每次调用多少钱"的单一数字 ——
-				// 展示 ModelRatio(与「分组与模型定价」页面展示的口径一致),
-				// 而不是编一个虚假的按次价格。
+				// 按 token 倍率计费没有一个"每次调用多少钱"的单一数字 —— 展示
+				// ModelRatio(与「分组与模型定价」页面展示的口径一致),而不是编一个
+				// 虚假的按次价格;同时给出折算后的每百万 token 金额,免得管理端
+				// 把裸倍率当钱读。
 				price = resolved.ModelRatio
+				row.BillingMode = "ratio"
+				if common.QuotaPerUnit > 0 && resolved.ModelRatio > 0 {
+					inputPerM := resolved.ModelRatio * 1_000_000 / common.QuotaPerUnit * resolved.GroupRatioApplied
+					row.InputPricePerM = &inputPerM
+					if resolved.CompletionRatio > 0 {
+						outputPerM := inputPerM * resolved.CompletionRatio
+						row.OutputPricePerM = &outputPerM
+					}
+				}
+			} else {
+				row.BillingMode = "per_call"
 			}
 			row.Price = &price
 		}

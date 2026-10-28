@@ -35,7 +35,8 @@ Powered by [expr-lang/expr](https://github.com/expr-lang/expr). Expressions are 
 | `cr` | 缓存命中（读取）token 数 |
 | `cc` | 缓存创建 token 数（Claude 5分钟 TTL / 通用） |
 | `cc1h` | 缓存创建 token 数 — 1小时 TTL（Claude 专用） |
-| `img` | 图片输入 token 数 |
+| `img` | 图片输入 token 数。表达式中使用 `img_cr` 时，这里只保留**未缓存**的图片输入 |
+| `img_cr` | 缓存命中（读取）的**图片**输入 token 数（ToAPIs 等把缓存图片单独定价的上游会上报） |
 | `ai` | 音频输入 token 数 |
 
 **输出侧变量：**
@@ -61,6 +62,8 @@ Powered by [expr-lang/expr](https://github.com/expr-lang/expr). Expressions are 
 | `p * 3 + c * 15` | 1000 | 没用 `cr`/`img`，所以缓存和图片都包含在 `p` 里，全按 $3 计费 |
 | `p * 3 + c * 15 + cr * 0.3` | 800 | 用了 `cr`，缓存 200 从 `p` 中扣除，按 $0.3 单独计费；图片仍在 `p` 里按 $3 计费 |
 | `p * 3 + c * 15 + cr * 0.3 + img * 2` | 700 | 用了 `cr` 和 `img`，都从 `p` 中扣除，各自按自己的价格计费 |
+
+图片输入的缓存拆分同理：`cr` 是**所有**缓存输入（文本+图片）。表达式一旦引用 `img_cr`，系统会把缓存里的图片部分从 `cr` 和 `img` 中各减一次 —— `cr` 只剩缓存文本、`img` 只剩未缓存图片 —— 避免同一批 token 被按缓存价和图片价重复计费。
 
 输出侧同理（假设 completion_tokens=500，其中包含 100 audio output）：
 
@@ -103,6 +106,10 @@ len <= 200000
 
 # Image model (no separate cache/audio pricing — those tokens stay in p/c)
 tier("base", p * 2 + c * 8 + img * 2.5)
+
+# Image model with cached image input priced separately (ToAPIs style)
+# img_cr 单独计价后：cr 只剩缓存文本、img 只剩未缓存图片
+tier("base", p * 4 + cr * 1 + img * 6.4 + img_cr * 1.6 + img_o * 24)
 
 # Multimodal with audio
 tier("base", p * 0.43 + c * 3.06 + img * 0.78 + ai * 3.81 + ao * 15.11)

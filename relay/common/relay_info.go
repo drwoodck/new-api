@@ -980,6 +980,53 @@ type TaskInfo struct {
 	// Resolution 上游实际输出的归一化分辨率档位键（"480p"/"720p"/"1080p"/"4k"），
 	// 用于档位计费的按实际档差额结算。上游未返回时保持空，此时沿用预扣档。
 	Resolution string `json:"resolution,omitempty"`
+
+	// 上游按 token 计费时回报的用量明细（异步任务链路）。上游没有按 token
+	// 计费（按次/按秒）时这些字段全为 0，结算继续走档位/时长/模板倍率路径。
+	//
+	// 口径与 OpenAI 一致：PromptTokens 是**输入总量**（含缓存、含图片输入），
+	// 子类目是它的细分，不是并列。
+	PromptTokens           int `json:"prompt_tokens,omitempty"`
+	TextInputTokens        int `json:"text_input_tokens,omitempty"`  // 输入里的文本部分（含缓存文本）
+	ImageInputTokens       int `json:"image_input_tokens,omitempty"` // 输入里的图片部分（含缓存图片）
+	CachedTextInputTokens  int `json:"cached_text_input_tokens,omitempty"`
+	CachedImageInputTokens int `json:"cached_image_input_tokens,omitempty"`
+	TextOutputTokens       int `json:"text_output_tokens,omitempty"`
+	ImageOutputTokens      int `json:"image_output_tokens,omitempty"`
+}
+
+// Usage 把任务结果里的 token 明细整理成 dto.Usage（OpenAI 口径），供
+// 表达式计费结算使用。上游没有回报任何 token 用量时返回 nil。
+func (t *TaskInfo) Usage() *dto.Usage {
+	if t == nil || t.PromptTokens <= 0 && t.TotalTokens <= 0 && t.ImageOutputTokens <= 0 && t.TextOutputTokens <= 0 {
+		return nil
+	}
+	completion := t.TextOutputTokens + t.ImageOutputTokens
+	if completion == 0 {
+		completion = t.CompletionTokens
+	}
+	prompt := t.PromptTokens
+	if prompt == 0 {
+		prompt = t.TotalTokens - completion
+	}
+	if prompt < 0 {
+		prompt = 0
+	}
+	return &dto.Usage{
+		PromptTokens:     prompt,
+		CompletionTokens: completion,
+		TotalTokens:      prompt + completion,
+		PromptTokensDetails: dto.InputTokenDetails{
+			TextTokens:        t.TextInputTokens,
+			ImageTokens:       t.ImageInputTokens,
+			CachedTokens:      t.CachedTextInputTokens + t.CachedImageInputTokens,
+			CachedImageTokens: t.CachedImageInputTokens,
+		},
+		CompletionTokenDetails: dto.OutputTokenDetails{
+			TextTokens:  t.TextOutputTokens,
+			ImageTokens: t.ImageOutputTokens,
+		},
+	}
 }
 
 func FailTaskInfo(reason string) *TaskInfo {

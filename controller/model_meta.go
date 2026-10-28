@@ -10,10 +10,40 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
+
+// fillModelBillingDisplay 补上「价格怎么展示」需要的信息。
+//
+//   - 表达式计费（tiered_expr）：价格不在 models 表、也不在 model_group_prices
+//     表里，而在 billing_setting 的表达式里。管理端价格列必须能识别它，否则
+//     四条价格来源（固定价 / 秒价 / 档表 / 倍率）全空，只能显示成减号。
+//   - 纯倍率计费：把 ratio 折算成「每百万 token 的美元价」，避免管理端把裸倍率
+//     当金额读。折算口径与计费一致：usd = tokens × ratio / QuotaPerUnit。
+func fillModelBillingDisplay(mm *model.Model) {
+	if mm == nil {
+		return
+	}
+	if billing_setting.GetBillingMode(mm.ModelName) == billing_setting.BillingModeTieredExpr {
+		mm.BillingMode = billing_setting.BillingModeTieredExpr
+		if expr, ok := billing_setting.GetBillingExpr(mm.ModelName); ok {
+			mm.BillingExpr = expr
+		}
+		return
+	}
+	// 固定价 / 秒价 / 档表都有自己的金额口径，倍率折算只对「纯倍率」有意义。
+	if mm.ModelPrice > 0 || mm.ModelRatio <= 0 || common.QuotaPerUnit <= 0 {
+		return
+	}
+	inputPerM := mm.ModelRatio * 1_000_000 / common.QuotaPerUnit
+	mm.InputPricePerM = inputPerM
+	if mm.CompletionRatio > 0 {
+		mm.OutputPricePerM = inputPerM * mm.CompletionRatio
+	}
+}
 
 // GetAllModelsMeta 获取模型列表（分页）
 func GetAllModelsMeta(c *gin.Context) {
@@ -311,6 +341,8 @@ func enrichModels(models []*model.Model) {
 					}
 				}
 			}
+
+			fillModelBillingDisplay(mm)
 		}
 	}
 

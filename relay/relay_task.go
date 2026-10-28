@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
+	"github.com/QuantumNous/new-api/relay/channel/task/asyncimage"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -147,6 +148,17 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitResult, *dto.TaskError) {
 	info.InitChannelMeta(c)
 
+	// 0. 异步生图必须能解析出上游协议。解析不出来时不能退回 channel_type：
+	// OpenAI 类型（1）会落到 sora 视频适配器，图片提交会被打到 /v1/videos，
+	// 上游报 404，排查时完全看不出是「渠道少配了一个字段」。
+	if c.GetInt("relay_mode") == relayconstant.RelayModeImageSubmit {
+		if _, ok := AsyncImagePlatformForRequest(c); !ok {
+			return nil, service.TaskErrorWrapperLocal(
+				fmt.Errorf("未识别到异步生图上游：请把渠道 base_url 指向 toapis.cn / rightapi.ai，或在渠道设置里配置 async_image_provider"),
+				"async_image_provider_missing", http.StatusBadRequest)
+		}
+	}
+
 	// 1. 确定 platform → 创建适配器 → 验证请求
 	platform := constant.TaskPlatform(c.GetString("platform"))
 	if platform == "" {
@@ -234,7 +246,12 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	//    自动识别，不再依赖 TaskPricePatches 手工名单。
 	tierRequestBilling := taskIsTierRequestBilling(info.PriceData)
 	perCallFixedBilling := taskIsPerCallFixedBilling(info.PriceData)
-	if !tierRequestBilling && !perCallFixedBilling && (perSecondBilling || !common.StringsContains(constant.TaskPricePatches, modelName)) {
+	// 表达式计费（tiered_expr）的预扣额度已经是表达式按预留 token 算出的
+	// 最终金额（含分组倍率），不能再乘适配器注入的时长/尺寸倍率。
+	// 它与按次固定价的区别在于结算：完成时按上游回报的真实 token 重算，
+	// 所以不走 PerCallBilling。
+	tieredExprBilling := info.TieredBillingSnapshot != nil
+	if !tierRequestBilling && !perCallFixedBilling && !tieredExprBilling && (perSecondBilling || !common.StringsContains(constant.TaskPricePatches, modelName)) {
 		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
 		quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
 		info.PriceData.Quota = quota
@@ -433,6 +450,120 @@ var fetchRespBuilders = map[int]func(c *gin.Context) (respBody []byte, taskResp 
 	relayconstant.RelayModeSunoFetchByID:  sunoFetchByIDRespBodyBuilder,
 	relayconstant.RelayModeSunoFetch:      sunoFetchRespBodyBuilder,
 	relayconstant.RelayModeVideoFetchByID: videoFetchByIDRespBodyBuilder,
+	relayconstant.RelayModeImageFetchByID: imageFetchByIDRespBodyBuilder,
+}
+
+// imageTaskFetchResponse is the async image polling shape. It matches what the
+// canvas client reads (status / progress / data[0].url) and stays close enough
+// to the OpenAI task convention that API users can poll it with the same code
+// they use for /v1/videos.
+type imageTaskFetchResponse struct {
+	TaskID      string                 `json:"task_id"`
+	ID          string                 `json:"id"`
+	Object      string                 `json:"object"`
+	Model       string                 `json:"model"`
+	Status      string                 `json:"status"`
+	Progress    int                    `json:"progress,omitempty"`
+	CreatedAt   int64                  `json:"created_at,omitempty"`
+	CompletedAt int64                  `json:"completed_at,omitempty"`
+	Data        []imageTaskFetchResult `json:"data,omitempty"`
+	Error       *imageTaskFetchError   `json:"error,omitempty"`
+}
+
+type imageTaskFetchResult struct {
+	URL string `json:"url"`
+}
+
+type imageTaskFetchError struct {
+	Message string `json:"message"`
+	Code    string `json:"code,omitempty"`
+}
+
+// imageFetchByIDRespBodyBuilder serves GET /v1/images/{task_id}.
+func imageFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *dto.TaskError) {
+	taskID := c.Param("task_id")
+	userId := c.GetInt("id")
+
+	originTask, exist, err := model.GetByTaskId(userId, taskID)
+	if err != nil {
+		return nil, service.TaskErrorWrapper(err, "get_task_failed", http.StatusInternalServerError)
+	}
+	if !exist {
+		return nil, service.TaskErrorWrapperLocal(errors.New("task_not_exist"), "task_not_exist", http.StatusBadRequest)
+	}
+
+	respBody, err = buildImageTaskResponse(originTask)
+	if err != nil {
+		return nil, service.TaskErrorWrapper(err, "marshal_response_body_failed", http.StatusInternalServerError)
+	}
+	return respBody, nil
+}
+
+// buildImageTaskResponse projects a stored task row onto the polling shape.
+//
+// The URLs come from the persisted upstream payload (which carries every image
+// of a multi-image result); ResultURL is the fallback for providers whose
+// payload was already reduced to a single link.
+func buildImageTaskResponse(task *model.Task) ([]byte, error) {
+	status := "queued"
+	switch task.Status {
+	case model.TaskStatusSuccess:
+		status = "completed"
+	case model.TaskStatusFailure:
+		status = "failed"
+	case model.TaskStatusInProgress:
+		status = "in_progress"
+	case model.TaskStatusSubmitted, model.TaskStatusQueued, model.TaskStatusNotStart:
+		status = "queued"
+	}
+
+	response := imageTaskFetchResponse{
+		TaskID:    task.TaskID,
+		ID:        task.TaskID,
+		Object:    "generation.task",
+		Model:     task.Properties.OriginModelName,
+		Status:    status,
+		Progress:  progressPercent(task.Progress),
+		CreatedAt: task.CreatedAt,
+	}
+
+	if status == "completed" {
+		urls := asyncimage.ResultURLsFromRaw(task.Data)
+		if len(urls) == 0 {
+			if fallback := strings.TrimSpace(task.GetResultURL()); fallback != "" {
+				urls = []string{fallback}
+			}
+		}
+		for _, url := range urls {
+			response.Data = append(response.Data, imageTaskFetchResult{URL: url})
+		}
+		response.CompletedAt = task.FinishTime
+	}
+	if status == "failed" {
+		message := strings.TrimSpace(task.FailReason)
+		if message == "" {
+			message = "upstream task failed"
+		}
+		response.Error = &imageTaskFetchError{Message: message}
+	}
+
+	return common.Marshal(response)
+}
+
+// progressPercent turns the stored "45%"/"100%" progress string into a number.
+func progressPercent(progress string) int {
+	trimmed := strings.TrimSuffix(strings.TrimSpace(progress), "%")
+	if trimmed == "" {
+		return 0
+	}
+	value, err := strconv.Atoi(trimmed)
+	if err != nil || value < 0 {
+		return 0
+	}
+	if value > 100 {
+		return 100
+	}
+	return value
 }
 
 func RelayTaskFetch(c *gin.Context, relayMode int) (taskResp *dto.TaskError) {

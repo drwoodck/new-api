@@ -272,3 +272,115 @@ func TestModelPriceHelperRequestBillingRatiosOnlyApplyToFixedPrice(t *testing.T)
 	require.Equal(t, common.QuotaClampOverflow, clamp.Kind)
 	require.Nil(t, info.Billing)
 }
+
+// 表达式计费在任务链路上的预扣：按请求像素尺寸折算预留的图片输出 token。
+//
+// 预扣只是占用，最终按完成时上游回报的实际 token 结算，所以这里锁的是
+// 「预留量的计算口径」和「不把表达式模型标成按次固定价」这两件事。
+func TestTaskModelPriceHelperTieredReservesByPixelSize(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+	})
+
+	const model = "toapis-task-tiered"
+	const expr = `tier("base", p * 4 + img_cr * 1.6 + img_o * 24)`
+	modeJSON, err := common.Marshal(map[string]string{model: billing_setting.BillingModeTieredExpr})
+	require.NoError(t, err)
+	exprJSON, err := common.Marshal(map[string]string{model: expr})
+	require.NoError(t, err)
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode":    string(modeJSON),
+		"billing_setting.billing_expr":    string(exprJSON),
+		"group_ratio_setting.group_ratio": `{"default":1,"free":0}`,
+	}))
+
+	quotaFor := func(reserveTokens int) int {
+		return int(common.QuotaRound(float64(reserveTokens) * 24.0 / 1_000_000 * common.QuotaPerUnit))
+	}
+
+	cases := []struct {
+		name          string
+		size          string
+		wantReserved  int
+		wantApproxFor int
+	}{
+		// 基准预留量：一张 1024x1024
+		{name: "1 megapixel keeps baseline", size: "1024x1024", wantReserved: 196},
+		// 2880x2880 = 7.91 MP -> 196*7.91 = 1550（向上取整的线性估计，刻意多于上游实测的 659）
+		{name: "4K square scales with pixels", size: "2880x2880", wantReserved: 1550},
+		// 只有比例、没有像素时退回基准预留量
+		{name: "ratio-only falls back to baseline", size: "16:9", wantReserved: 196},
+		{name: "missing size falls back to baseline", size: "", wantReserved: 196},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Set("group", "default")
+			ctx.Set("task_request", relaycommon.TaskSubmitReq{Size: tt.size})
+			info := &relaycommon.RelayInfo{
+				OriginModelName: model,
+				UserGroup:       "default",
+				UsingGroup:      "default",
+			}
+
+			priceData, err := ModelPriceHelperPerCall(ctx, info)
+			require.NoError(t, err)
+
+			require.False(t, priceData.UsePrice, "表达式计费不是按次固定价，否则完成时不会做 token 差额结算")
+			require.Equal(t, quotaFor(tt.wantReserved), priceData.Quota)
+			require.NotNil(t, info.TieredBillingSnapshot)
+			require.Equal(t, tt.wantReserved, info.TieredBillingSnapshot.EstimatedCompletionTokens)
+			require.Equal(t, expr, info.TieredBillingSnapshot.ExprString)
+			require.Equal(t, common.QuotaPerUnit, info.TieredBillingSnapshot.QuotaPerUnit)
+		})
+	}
+}
+
+// 任务结算时没有原始请求可复现，引用请求条件的表达式必须直接拒绝，
+// 否则预扣与结算会按两套不同条件计费。
+func TestTaskModelPriceHelperTieredRejectsRequestProbe(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+	})
+
+	const model = "toapis-task-probe"
+	const probeExpr = `param("quality") == "high" ? tier("high", img_o * 24) : tier("base", img_o * 12)`
+	modeJSON, err := common.Marshal(map[string]string{model: billing_setting.BillingModeTieredExpr})
+	require.NoError(t, err)
+	exprJSON, err := common.Marshal(map[string]string{model: probeExpr})
+	require.NoError(t, err)
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode":    string(modeJSON),
+		"billing_setting.billing_expr":    string(exprJSON),
+		"group_ratio_setting.group_ratio": `{"default":1,"free":0}`,
+	}))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "default")
+	ctx.Set("task_request", relaycommon.TaskSubmitReq{Size: "1024x1024"})
+	info := &relaycommon.RelayInfo{
+		OriginModelName: model,
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+
+	_, priceErr := ModelPriceHelperPerCall(ctx, info)
+	require.Error(t, priceErr)
+	require.Contains(t, priceErr.Error(), "param")
+	require.Nil(t, info.TieredBillingSnapshot)
+}

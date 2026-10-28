@@ -27,10 +27,11 @@ import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 
-import type {
-  CanvasCatalogOverviewGroupPrice,
-  CanvasCatalogOverviewRow,
-} from '../types'
+import type { CanvasCatalogOverviewRow } from '../types'
+import {
+  formatOverviewGroupPrice,
+  isOverviewGroupPriceConfigured,
+} from '../lib/overview-price-format'
 
 type CanvasCatalogOverviewTableProps = {
   rows: CanvasCatalogOverviewRow[]
@@ -53,32 +54,6 @@ type CanvasCatalogOverviewTableProps = {
   selectable?: boolean
   selectedIds?: number[]
   onSelectedChange?: (ids: number[]) => void
-}
-
-function formatGroupPrice(t: (key: string) => string, price: number | null) {
-  if (price == null) return t('未配置')
-  // Ratio-based models don't have a single "per call" price — see the Go
-  // side's buildOverviewGroupPrices, which puts model_ratio here instead in
-  // that case. Neither this component nor its caller can tell which one it
-  // is from the number alone, so it's rendered without a currency prefix
-  // (the price column's own quota_type would be needed to disambiguate, and
-  // adding it would duplicate the same distinction the pricing page already
-  // makes elsewhere) — good enough for an at-a-glance overview table.
-  return price.toString()
-}
-
-/**
- * 一个分组价格在总览里的展示文案。表格徽标、对话框的「当前计费」预览、
- * Excel 导出三处共用这一份 —— 导出的必须是屏幕上看到的那行字。
- */
-// eslint-disable-next-line react-refresh/only-export-components
-export function formatOverviewGroupPrice(
-  gp: CanvasCatalogOverviewGroupPrice,
-  t: (key: string) => string
-): string {
-  const tierCount = gp.price_tiers?.length ?? 0
-  if (tierCount > 0) return `${gp.group_name}: ${t('档表')} ×${tierCount}`
-  return `${gp.group_name}: ${formatGroupPrice(t, gp.price)}`
 }
 
 /** 状态列的纯文本口径(徽标渲染不出「模型启用 / 目录上架」这一行字)。 */
@@ -275,15 +250,12 @@ export function CanvasCatalogOverviewTable(
                 <span className='text-muted-foreground text-xs'>--</span>
               ) : (
                 r.group_prices.map((gp) => {
-                  const tierCount = gp.price_tiers?.length ?? 0
                   return (
                     <StatusBadge
                       key={gp.group_name}
                       label={formatOverviewGroupPrice(gp, t)}
                       variant={
-                        gp.price == null && tierCount === 0
-                          ? 'warning'
-                          : 'neutral'
+                        isOverviewGroupPriceConfigured(gp) ? 'neutral' : 'warning'
                       }
                       copyable={false}
                     />

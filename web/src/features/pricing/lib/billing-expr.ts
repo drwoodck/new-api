@@ -109,6 +109,18 @@ export const BILLING_VARS: BillingVar[] = [
     group: 'media',
   },
   {
+    // 缓存命中的图片输入。上游把「缓存图片」单价单独列出来（如 ToAPIs 1.6 对
+    // 未缓存 6.4），表达式用 img_cr 单独定价后，img 只剩未缓存部分。
+    // 顺序必须紧跟 img：解析器与生成器都按 BILLING_VARS 顺序产出「var * coef」。
+    key: 'img_cr',
+    field: 'cachedImagePrice',
+    tierField: 'cached_image_unit_cost',
+    label: 'Cached image input price',
+    shortLabel: 'Image In (cached)',
+    side: 'input',
+    group: 'media',
+  },
+  {
     key: 'img_o',
     field: 'imageOutputPrice',
     tierField: 'image_output_unit_cost',

@@ -5591,6 +5591,8 @@
     "更新成功:共更新 {{count}} 个模型": "Update succeeded: {{count}} model(s) updated",
     "编辑": "Edit",
     "加载中...": "Loading...",
-    "操作失败": "Operation failed"
+    "操作失败": "Operation failed",
+    "Cached image input price": "Giá đầu vào hình ảnh đã lưu đệm",
+    "Image In (cached)": "Ảnh đầu vào (bộ đệm)"
   }
 }

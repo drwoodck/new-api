@@ -4,7 +4,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -34,11 +36,75 @@ func BuildTaskTierInput(c *gin.Context, info *RelayInfo) hosttypes.TierInput {
 	return BuildTierInputFromRequest(info.ChannelType, req, ResolveTaskVideoDuration(c, info.ChannelType))
 }
 
+// BuildImageTierInput 从**同步**图片请求里取出档位选择输入。
+//
+// 同步图片不是 TaskSubmitReq（那是任务链路的请求视图），档位相关信息在已解析
+// 好的图片请求上：
+//
+//	Size  —— "1024x1024" 像素或 "1:1" 比例，是分辨率维度的来源；
+//	Extra —— 客户端多发的字段都落在这里，档位需要的是 resolution
+//	         （"1K"/"2K"/"4K"，对应 price_tiers 的 image_size 维度），
+//	         少数上游把同一维度叫 image_size。
+//
+// 为什么读 info.Request 而不是重新读请求体：请求体在解析阶段已经被消费/缓存，
+// 计费阶段再去摸 body storage 会跟解析顺序耦合（线上曾因此 panic）；解析后的
+// 请求对象是这条链路的既有权威来源，也不再受 multipart/压缩影响。
+//
+// 为什么渠道类型从 gin context 取而不是 info.ChannelType：计费发生在
+// controller.Relay 里、**channel 选定之前**，那时 info.ChannelMeta 还是 nil，
+// 读提升字段 info.ChannelType 会直接空指针 panic（线上踩过）。渠道类型在
+// Distribute 阶段就已经写进 context，这里读 context 才是同一时刻正确的来源。
+//
+// 取到字段后仍交给 BuildTierInputFromRequest 归一化，避免与任务链路出现两套
+// 「什么算 1K / 什么算 720p」的判定而慢慢漂移。返回空输入时调用方会落到
+// Unavailable（硬报错），而不是静默按 0 元放行。
+func BuildImageTierInput(c *gin.Context, info *RelayInfo) hosttypes.TierInput {
+	req, ok := imageTierRequest(info)
+	if !ok {
+		return hosttypes.TierInput{}
+	}
+	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
+	return BuildTierInputFromRequest(channelType, req, 0)
+}
+
+// imageTierRequest 把图片请求里与档位有关的字段整理成 TaskSubmitReq 的形态。
+func imageTierRequest(info *RelayInfo) (TaskSubmitReq, bool) {
+	if info == nil {
+		return TaskSubmitReq{}, false
+	}
+	img, ok := info.Request.(*dto.ImageRequest)
+	if !ok || img == nil {
+		return TaskSubmitReq{}, false
+	}
+	resolution := imageExtraString(img, "resolution")
+	if resolution == "" {
+		// image_size 是同一维度在部分上游上的字段名。
+		resolution = imageExtraString(img, "image_size")
+	}
+	return TaskSubmitReq{
+		Size:       strings.TrimSpace(img.Size),
+		Resolution: resolution,
+		Mode:       imageExtraString(img, "mode"),
+	}, true
+}
+
+// imageExtraString 读取客户端多发的字符串字段（ImageRequest.Extra）。
+func imageExtraString(img *dto.ImageRequest, key string) string {
+	raw, ok := img.Extra[key]
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+	var value string
+	if err := common.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
 // BuildTierInputFromRequest 是不依赖 gin context 的纯函数版本。
 //
 // 抽出来是为了让档位诊断(controller 侧)复用**完全相同**的渠道取值逻辑 ——
-// 诊断必须和计费走同一条路径,否则"诊断说能命中、计费说不能"比没有诊断更糟。
-// 除时长改为入参外,与 BuildTaskTierInput 逐行等价。
+// 诊断必须和计费走同一条路径,否则"诊断说能命中、计费说不能"比没有诊断更糟。// 除时长改为入参外,与 BuildTaskTierInput 逐行等价。
 func BuildTierInputFromRequest(channelType int, req TaskSubmitReq, durationSeconds int) hosttypes.TierInput {
 	input := hosttypes.TierInput{
 		DurationSeconds: durationSeconds,

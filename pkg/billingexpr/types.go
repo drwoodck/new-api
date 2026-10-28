@@ -23,9 +23,15 @@ type TokenParams struct {
 	CC   float64 // cache creation tokens (5-min TTL for Claude, generic for others)
 	CC1h float64 // cache creation tokens — 1-hour TTL (Claude only)
 	Img  float64 // image input tokens
-	ImgO float64 // image output tokens
-	AI   float64 // audio input tokens
-	AO   float64 // audio output tokens
+	// ImgCR is the cached (cache-hit) part of the image input tokens. Upstreams
+	// that price cached image input separately from uncached image input
+	// (ToAPIs: 1.6 vs 6.4 USD per 1M) report the split. When an expression
+	// references img_cr, both img and cr are reduced by it so every token is
+	// priced exactly once.
+	ImgCR float64
+	ImgO  float64 // image output tokens
+	AI    float64 // audio input tokens
+	AO    float64 // audio output tokens
 }
 
 // RequestRuleTrace describes one request-dependent multiplier detected at compile time.

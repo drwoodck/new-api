@@ -85,6 +85,18 @@ type ChannelOtherSettings struct {
 	UpstreamModelUpdateLastRemovedModels  []string              `json:"upstream_model_update_last_removed_models,omitempty"`  // 上次检测到的可删除模型
 	UpstreamModelUpdateIgnoredModels      []string              `json:"upstream_model_update_ignored_models,omitempty"`       // 手动忽略的模型
 	AdvancedCustom                        *AdvancedCustomConfig `json:"advanced_custom,omitempty"`
+	// AsyncImageProvider 声明该渠道的图片接口是异步任务型，以及用哪家的协议。
+	// 取值见 constant.AsyncImageProvider*（"toapis" / "toapis_mj" / "rightapi"），
+	// 留空表示普通同步图片渠道。
+	//
+	// 为什么放在渠道设置而不是新增渠道类型：这两家都是 OpenAI 兼容网关，同一个
+	// 渠道里可能还挂着同步模型；按渠道切换上游实现不影响既有的渠道分发/分组能力。
+	AsyncImageProvider string `json:"async_image_provider,omitempty"`
+	// AsyncImageProviderModels 按模型覆盖 AsyncImageProvider（键为对外模型名）。
+	// 典型用法：同一个 ToAPIs 渠道里 `midjourney` 走 /v1/midjourney/*，其余模型
+	// 走 /v1/images/generations，渠道级默认值无法同时表达两者。
+	// 值留空或填 "sync" 表示该模型走普通同步图片链路。
+	AsyncImageProviderModels map[string]string `json:"async_image_provider_models,omitempty"`
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {

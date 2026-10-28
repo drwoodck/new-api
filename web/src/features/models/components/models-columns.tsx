@@ -43,65 +43,10 @@ import {
   getQuotaTypeConfig,
 } from '../constants'
 import { parseModelTags, formatEndpointsDisplay } from '../lib'
-import type { Model, PriceTierList, Vendor } from '../types'
+import { buildGroupPriceLines, formatPriceValue } from '../lib/price-display'
+import type { Model, Vendor } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 import { DescriptionCell } from './description-cell'
-
-/**
- * 一个价格来源(统一计价或某个分组)的展示文案:固定价 > 秒价 > 档表 > 倍率,
- * 与计费时的优先级一致。空串表示这块没有任何价格配置。
- */
-function formatPriceValue(source: {
-  model_price?: number | null
-  model_ratio?: number | null
-  completion_ratio?: number | null
-  video_second_price?: number | null
-  price_tiers?: PriceTierList | null
-}): string {
-  if (source.model_price && source.model_price > 0) {
-    return `$${source.model_price.toFixed(4)}`
-  }
-  if (source.video_second_price && source.video_second_price > 0) {
-    return `$${source.video_second_price.toFixed(4)}/s`
-  }
-
-  const tiers = source.price_tiers ?? []
-  if (tiers.length > 0) {
-    // 档位价格字段是 price(对齐后端 types.PriceTier.Price)。
-    const prices = tiers.map((tier) => tier.price)
-    const min = Math.min(...prices)
-    const max = Math.max(...prices)
-    return min === max
-      ? `$${min.toFixed(4)}`
-      : `$${min.toFixed(4)}-$${max.toFixed(4)}`
-  }
-
-  if (source.model_ratio && source.model_ratio > 0) {
-    // completionRatio 可能是 0(有效值),不能用 && 判断。
-    const ratioText =
-      source.completion_ratio != null &&
-      source.completion_ratio !== source.model_ratio
-        ? `${source.model_ratio}/${source.completion_ratio}`
-        : `${source.model_ratio}`
-    return `${ratioText}×`
-  }
-
-  return ''
-}
-
-/**
- * 分组分别定价下的价格行:每个已配置分组一行「分组名: 值」,没配价格的分组
- * 不出现(它的语义是"该分组不可用该模型",不是 0 元)。表格与 Excel 导出共用。
- */
-function buildGroupPriceLines(model: Model): string[] {
-  const lines: string[] = []
-  for (const groupPrice of model.group_prices ?? []) {
-    const value = formatPriceValue(groupPrice)
-    if (value === '') continue
-    lines.push(`${groupPrice.group_name}: ${value}`)
-  }
-  return lines
-}
 
 /** 空列表在单元格里的统一占位,与 BadgeListCell 的「-」一致。 */
 function EmptyCell() {
@@ -374,8 +319,25 @@ function buildModelsColumns(
       meta: { wrap: true },
       cell: ({ row }) => {
         const model = row.original
+        // 表达式计费：价格不在 models 表也不在分组价表里，其它四条来源必然全空。
+        // 单独一个分支显示「表达式计费 + 表达式原文」，否则这类模型看起来像没定价。
+        if (model.billing_mode === 'tiered_expr') {
+          return (
+            <div className='font-mono text-xs break-all whitespace-normal'>
+              <span>{t('Expression billing')}</span>
+              {model.billing_expr ? (
+                <div
+                  className='text-muted-foreground mt-0.5 text-[10px] break-all whitespace-normal'
+                  title={model.billing_expr}
+                >
+                  {model.billing_expr}
+                </div>
+              ) : null}
+            </div>
+          )
+        }
         const groupLines = model.group_pricing_enabled
-          ? buildGroupPriceLines(model)
+          ? buildGroupPriceLines(model, t)
           : []
 
         if (groupLines.length > 0) {
@@ -391,7 +353,7 @@ function buildModelsColumns(
         }
 
         // 未开分组定价(或开了但一个分组都没配价格)时回退到统一价。
-        const priceText = formatPriceValue(model)
+        const priceText = formatPriceValue(model, t)
         if (priceText === '') {
           return <span className='text-muted-foreground text-xs'>-</span>
         }
@@ -675,11 +637,11 @@ export function getModelExportColumns(
       width: 24,
       value: (model) => {
         const groupLines = model.group_pricing_enabled
-          ? buildGroupPriceLines(model)
+          ? buildGroupPriceLines(model, t)
           : []
         return groupLines.length > 0
           ? groupLines.join(' / ')
-          : formatPriceValue(model)
+          : formatPriceValue(model, t)
       },
     },
     {

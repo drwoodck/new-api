@@ -1,10 +1,13 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/relay"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/gin-gonic/gin"
@@ -112,12 +115,33 @@ func SetRelayRouter(router *gin.Engine) {
 
 		// image related routes
 		httpRouter.POST("/edits", func(c *gin.Context) {
+			if rejectSyncImageOnAsyncChannel(c) {
+				return
+			}
 			controller.Relay(c, types.RelayFormatOpenAIImage)
 		})
 		httpRouter.POST("/images/generations", func(c *gin.Context) {
+			// 异步生图：异步上游只有任务接口，客户端用 ?async=true / body async 表达。
+			// 走任务管线（预扣→轮询→结算/退款），返回 {task_id,status}，
+			// 查询见 GET /v1/images/{task_id}。
+			//
+			// 必须同时要求「该渠道确实配了异步上游」：画布图片契约改 async_poll 后
+			// 会对**所有**图片模型带 ?async=true，同步渠道（paipu/奶龙等）不能因此
+			// 被推进任务管线 —— 对它们来说这个参数是噪声，照旧走同步转发。
+			if relay.ShouldUseAsyncImageTask(c) {
+				c.Set("relay_mode", relayconstant.RelayModeImageSubmit)
+				controller.RelayTask(c)
+				return
+			}
+			if rejectSyncImageOnAsyncChannel(c) {
+				return
+			}
 			controller.Relay(c, types.RelayFormatOpenAIImage)
 		})
 		httpRouter.POST("/images/edits", func(c *gin.Context) {
+			if rejectSyncImageOnAsyncChannel(c) {
+				return
+			}
 			controller.Relay(c, types.RelayFormatOpenAIImage)
 		})
 
@@ -203,6 +227,28 @@ func SetRelayRouter(router *gin.Engine) {
 			controller.Relay(c, types.RelayFormatGemini)
 		})
 	}
+}
+
+// rejectSyncImageOnAsyncChannel answers a synchronous image request that landed
+// on an async-only channel.
+//
+// Without this the sync handler would treat the upstream's task object as an
+// image response, pass it through verbatim and still charge for it — the user
+// pays once and receives a `{"object":"generation.task"}` blob. Returning a 400
+// keeps the failure visible and free.
+func rejectSyncImageOnAsyncChannel(c *gin.Context) bool {
+	if relay.AsyncImageProviderForRequest(c) == "" {
+		return false
+	}
+	c.JSON(http.StatusBadRequest, gin.H{
+		"error": gin.H{
+			"message": "该渠道的生成为异步任务，请使用 POST /v1/images/generations?async=true 提交，再用 GET /v1/images/{task_id} 查询结果",
+			"type":    "invalid_request_error",
+			"code":    "async_image_required",
+			"param":   "",
+		},
+	})
+	return true
 }
 
 func registerMjRouterGroup(relayMjRouter *gin.RouterGroup) {

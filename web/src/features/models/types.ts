@@ -120,6 +120,16 @@ export interface Model {
   model_ratio?: number
   model_price?: number
   completion_ratio?: number
+  /**
+   * 表达式计费（tiered_expr）：价格既不在 models 表也不在 model_group_prices
+   * 表里，而在计费表达式里。此时 model_price / model_ratio / price_tiers 全为空，
+   * 价格列必须按 billing_mode 走单独分支，否则只能显示成「-」。
+   */
+  billing_mode?: string
+  billing_expr?: string
+  /** 纯倍率计费折算后的「每百万 token 美元价」，由后端按 QuotaPerUnit 算好。 */
+  input_price_per_m?: number
+  output_price_per_m?: number
 }
 
 /**

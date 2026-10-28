@@ -28,6 +28,13 @@ const cacheExpr = `tier("default", p * 2 + c * 10 + cr * 0.2 + cc * 2.5 + cc1h *
 // Expression with request probes
 const probeExpr = `param("service_tier") == "fast" ? tier("fast", p * 4 + c * 20) : tier("normal", p * 2 + c * 10)`
 
+// ToAPIs 的图片按 token 计费表达式：文本输入 4 / 缓存文本 1 / 图片输入 6.4 /
+// 缓存图片 1.6 / 图片输出 24（USD per 1M tokens）。
+const toapisImageExpr = `tier("base", p * 4 + cr * 1 + img * 6.4 + img_cr * 1.6 + img_o * 24)`
+
+// 没有单独给缓存图片定价的老式多模态表达式。
+const legacyMultimodalExpr = `tier("base", p * 4 + cr * 1 + img * 6.4 + img_o * 24)`
+
 const testQuotaPerUnit = 500_000.0
 
 func makeSnapshot(expr string, groupRatio float64, estPrompt, estCompletion int) *billingexpr.BillingSnapshot {
@@ -1023,4 +1030,105 @@ func BenchmarkRatioBilling_Parallel(b *testing.B) {
 			ratioQuota(usage, false, 1.5, 5.0, 0.1, 1.0, 1.5)
 		}
 	})
+}
+
+// 缓存图片单独定价（img_cr）：同一批 token 只能计一次价。
+//
+// 构造：输入总量 1000，其中文本 600、图片 400；缓存 200，其中缓存图片 150。
+// 拆开后四类输入是：未缓存文本 550、缓存文本 50、未缓存图片 250、缓存图片 150。
+func TestBuildTieredTokenParams_CachedImageSplit(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 400,
+		PromptTokensDetails: dto.InputTokenDetails{
+			TextTokens:        600,
+			ImageTokens:       400,
+			CachedTokens:      200,
+			CachedImageTokens: 150,
+		},
+		CompletionTokenDetails: dto.OutputTokenDetails{ImageTokens: 400},
+	}
+
+	params := BuildTieredTokenParams(usage, false, billingexpr.UsedVars(toapisImageExpr))
+	require.Equal(t, 550.0, params.P, "p 应变成本缓存文本")
+	require.Equal(t, 50.0, params.CR, "cr 应变成本缓存文本")
+	require.Equal(t, 250.0, params.Img, "img 应变成未缓存图片")
+	require.Equal(t, 150.0, params.ImgCR, "img_cr 应是缓存图片")
+	require.Equal(t, 400.0, params.ImgO)
+	require.Equal(t, 0.0, params.C, "图片输出单独定价后 c 应为 0")
+
+	wantCost := (550*4.0 + 50*1.0 + 250*6.4 + 150*1.6 + 400*24.0) / 1_000_000 * testQuotaPerUnit
+	require.InDelta(t, wantCost, tieredQuota(toapisImageExpr, usage, false, 1), 1e-9)
+}
+
+// 表达式没引用 img_cr 时必须维持原有口径（缓存图片同时计入 cr 与 img），
+// 存量多模态表达式的计费结果不能因为新增变量而改变。
+func TestBuildTieredTokenParams_CachedImageSplitOnlyWhenExprUsesIt(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 400,
+		PromptTokensDetails: dto.InputTokenDetails{
+			TextTokens:        600,
+			ImageTokens:       400,
+			CachedTokens:      200,
+			CachedImageTokens: 150,
+		},
+		CompletionTokenDetails: dto.OutputTokenDetails{ImageTokens: 400},
+	}
+
+	params := BuildTieredTokenParams(usage, false, billingexpr.UsedVars(legacyMultimodalExpr))
+	require.Equal(t, 400.0, params.P, "p = 1000 - cr(200) - img(400)")
+	require.Equal(t, 200.0, params.CR, "cr 仍是全部缓存")
+	require.Equal(t, 400.0, params.Img, "img 仍是全部图片输入")
+	// ImgCR 只是把上游报的原始值带出来；表达式没引用它就不参与计算，
+	// 关键是上面这三个参与计费的维度保持旧口径。
+	require.Equal(t, 150.0, params.ImgCR)
+
+	wantCost := (400*4.0 + 200*1.0 + 400*6.4 + 400*24.0) / 1_000_000 * testQuotaPerUnit
+	require.InDelta(t, wantCost, tieredQuota(legacyMultimodalExpr, usage, false, 1), 1e-9)
+}
+
+// 表达式只给 img_cr 定价、不给 cr 定价时，缓存图片仍必须从 p 里摘出去，
+// 否则会按文本价再收一次；缓存文本因为没单独定价，留在 p 里。
+func TestBuildTieredTokenParams_CachedImageWithoutCachePricing(t *testing.T) {
+	const expr = `tier("base", p * 4 + img * 6.4 + img_cr * 1.6 + img_o * 24)`
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 400,
+		PromptTokensDetails: dto.InputTokenDetails{
+			TextTokens:        600,
+			ImageTokens:       400,
+			CachedTokens:      200,
+			CachedImageTokens: 150,
+		},
+		CompletionTokenDetails: dto.OutputTokenDetails{ImageTokens: 400},
+	}
+
+	params := BuildTieredTokenParams(usage, false, billingexpr.UsedVars(expr))
+	require.Equal(t, 600.0, params.P, "p = 未缓存文本 550 + 缓存文本 50")
+	require.Equal(t, 250.0, params.Img)
+	require.Equal(t, 150.0, params.ImgCR)
+
+	wantCost := (600*4.0 + 250*6.4 + 150*1.6 + 400*24.0) / 1_000_000 * testQuotaPerUnit
+	require.InDelta(t, wantCost, tieredQuota(expr, usage, false, 1), 1e-9)
+}
+
+// 上游回报的缓存图片 token 大于缓存总量或图片总量时（脏数据）必须收敛，
+// 不能把 p 减成负数或凭空造出 token。
+func TestBuildTieredTokenParams_CachedImageClamped(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens: 100,
+		PromptTokensDetails: dto.InputTokenDetails{
+			TextTokens:        100,
+			ImageTokens:       50,
+			CachedTokens:      20,
+			CachedImageTokens: 999,
+		},
+	}
+
+	params := BuildTieredTokenParams(usage, false, billingexpr.UsedVars(toapisImageExpr))
+	require.Equal(t, 20.0, params.ImgCR, "img_cr 收敛到缓存总量与图片总量中的较小者")
+	require.GreaterOrEqual(t, params.P, 0.0)
+	require.GreaterOrEqual(t, params.CR, 0.0)
+	require.GreaterOrEqual(t, params.Img, 0.0)
 }

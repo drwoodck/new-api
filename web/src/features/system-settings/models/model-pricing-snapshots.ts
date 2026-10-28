@@ -16,7 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { splitBillingExprAndRequestRules } from '@/features/pricing/lib/billing-expr'
+import {
+  BILLING_PRICING_VARS,
+  splitBillingExprAndRequestRules,
+} from '@/features/pricing/lib/billing-expr'
+import { tryParseVisualConfig } from '@/features/pricing/lib/tier-expr'
 
 import type { PriceTier } from '@/features/models/types'
 import { safeJsonParse } from '../utils/json-parser'
@@ -119,10 +123,36 @@ const classifyBillingMode = (
   return 'per-token'
 }
 
+// describeExpressionUnitPrices 把单档表达式解析回各项单价，供列表直接展示金额。
+//
+// 表达式模型的价格不落在任何价格表里，只写「Expression based」等于让管理员
+// 无从核对；能解析出单价时就按「变量 $ 单价」列出来（图片模型常见的
+// img / img_cr / img_o 都会各自出现）。解析不出来（多档、条件表达式、
+// 含不认识的变量）就返回 null，由调用方退回原来的档位摘要。
+const describeExpressionUnitPrices = (
+  expr: string,
+  t: (key: string) => string
+): string[] | null => {
+  const config = tryParseVisualConfig(expr)
+  if (!config || config.tiers.length !== 1) return null
+  const tier = config.tiers[0] as Record<string, unknown>
+  const parts: string[] = []
+  for (const variable of BILLING_PRICING_VARS) {
+    if (!variable.tierField) continue
+    const value = Number(tier[variable.tierField]) || 0
+    if (value > 0) {
+      parts.push(`${t(variable.shortLabel)} $${formatPricingNumber(value)}`)
+    }
+  }
+  return parts.length > 0 ? parts : null
+}
+
 const getExpressionSummary = (
   row: ModelPricingSnapshot,
   t: (key: string) => string
 ) => {
+  const unitPrices = describeExpressionUnitPrices(row.billingExpr ?? '', t)
+  if (unitPrices) return unitPrices.join(' · ')
   const tierCount = (row.billingExpr?.match(/tier\(/g) || []).length
   if (tierCount > 0) {
     return `${t('Tiered pricing')} · ${tierCount} ${t('tiers')}`
@@ -173,6 +203,9 @@ export const getPriceDetail = (
   t: (key: string) => string
 ) => {
   if (row.billingMode === 'tiered_expr') {
+    // 摘要列已经放了单价，这里放公式原文 —— 表达式就是最准确的价格明细，
+    // 核对时不必再去设置页翻 billing_setting。
+    if (row.billingExpr) return row.billingExpr
     return row.requestRuleExpr
       ? t('Includes request rules')
       : t('Expression based')

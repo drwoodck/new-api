@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { BILLING_CACHE_VAR_MAP } from './billing-expr'
+import { BILLING_CACHE_VAR_MAP, BILLING_VARS } from './billing-expr'
 
 export const CACHE_MODE_TIMED = 'timed'
 export const CACHE_MODE_GENERIC = 'generic'
@@ -38,6 +38,7 @@ export type VisualTier = {
   cache_create_unit_cost?: number
   cache_create_1h_unit_cost?: number
   image_unit_cost?: number
+  cached_image_unit_cost?: number
   image_output_unit_cost?: number
   audio_input_unit_cost?: number
   audio_output_unit_cost?: number
@@ -72,6 +73,7 @@ export function normalizeVisualTier(
     cache_create_unit_cost: Number(tier.cache_create_unit_cost) || 0,
     cache_create_1h_unit_cost: Number(tier.cache_create_1h_unit_cost) || 0,
     image_unit_cost: Number(tier.image_unit_cost) || 0,
+    cached_image_unit_cost: Number(tier.cached_image_unit_cost) || 0,
     image_output_unit_cost: Number(tier.image_output_unit_cost) || 0,
     audio_input_unit_cost: Number(tier.audio_input_unit_cost) || 0,
     audio_output_unit_cost: Number(tier.audio_output_unit_cost) || 0,
@@ -116,13 +118,16 @@ function buildTierBodyExpr(tier: VisualTier): string {
   const parts: string[] = []
   const ic = Number(tier.input_unit_cost) || 0
   const oc = Number(tier.output_unit_cost) || 0
-  parts.push(`p * ${ic}`)
-  parts.push(`c * ${oc}`)
+  // 只输出非零项：图片模型通常没有文本输出（c 为 0），写回 `c * 0` 会让
+  // 「解析 → 再生成」的文本与存库表达式对不上，导致本来能可视化编辑的表达式被判成不可编辑。
+  if (ic !== 0) parts.push(`p * ${ic}`)
+  if (oc !== 0) parts.push(`c * ${oc}`)
   for (const cv of BILLING_CACHE_VAR_MAP) {
     const v = Number((tier as Record<string, unknown>)[cv.field]) || 0
     if (v !== 0) parts.push(`${cv.exprVar} * ${v}`)
   }
-  return parts.join(' + ')
+  // 全零时仍要给出合法表达式（新建档位的初始形态）。
+  return parts.length > 0 ? parts.join(' + ') : 'p * 0 + c * 0'
 }
 
 export function generateExprFromVisualConfig(
@@ -160,6 +165,42 @@ export function generateExprFromVisualConfig(
   return parts.join(' : ')
 }
 
+/** stripWhitespace 用于「解析 → 再生成」的文本比对，忽略排版差异。 */
+const stripWhitespace = (value: string) => value.replaceAll(/\s+/g, '')
+
+// VAR_TO_TIER_FIELD 把表达式里的变量名映射到可视化档位的字段名。
+// p/c 是基准项，其余变量由 BILLING_VARS 的 tierField 决定（len 是条件专用变量，
+// 没有 tierField，不参与计价项解析）。
+const VAR_TO_TIER_FIELD: Record<string, string> = (() => {
+  const map: Record<string, string> = {
+    p: 'input_unit_cost',
+    c: 'output_unit_cost',
+  }
+  for (const variable of BILLING_VARS) {
+    if (variable.tierField) map[variable.key] = variable.tierField
+  }
+  return map
+})()
+
+/**
+ * parseTierBodyTerms 解析档位表达式主体里的「var * coef」加和。
+ * 任何一项认不出来就返回 null —— 调用方据此判定「不可视化编辑」，
+ * 宁可退回 raw 模式，也不要静默丢掉某一项计费。
+ */
+function parseTierBodyTerms(body: string): Record<string, number> | null {
+  const out: Record<string, number> = {}
+  for (const rawTerm of body.split('+')) {
+    const term = rawTerm.trim()
+    if (term === '') return null
+    const matched = term.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([\d.eE+-]+)$/)
+    if (!matched) return null
+    const field = VAR_TO_TIER_FIELD[matched[1]]
+    if (!field) return null
+    out[field] = Number(matched[2])
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
 export function tryParseVisualConfig(
   exprStr: string | null | undefined
 ): VisualConfig | null {
@@ -168,6 +209,33 @@ export function tryParseVisualConfig(
     let body = exprStr
     const versionMatch = body.match(/^v\d+:([\s\S]*)$/)
     if (versionMatch) body = versionMatch[1]
+
+    // 单档表达式按「var * coef」逐项解析，不依赖固定项序。
+    //
+    // 旧实现要求严格的 `p * A + c * B` 形态，图片模型通常是
+    // `p * 4 + cr * 1 + img * 6.4 + img_cr * 1.6 + img_o * 24`（没有 c 项、
+    // 还带缓存图片），匹配不上就只能落到 raw 模式 —— 可视化编译器形同虚设。
+    const singleMatch = body.match(/^tier\("([^"]*)",\s*([\s\S]*?)\)$/)
+    if (singleMatch) {
+      const parsedTerms = parseTierBodyTerms(singleMatch[2])
+      if (parsedTerms) {
+        const tier: Record<string, unknown> = {
+          conditions: [],
+          label: singleMatch[1],
+          ...parsedTerms,
+        }
+        const cfg = normalizeVisualConfig({
+          tiers: [normalizeVisualTier(tier as Partial<VisualTier>)],
+        })
+        // 回写校准：解析结果重新生成必须与原表达式逐字符一致（忽略空白），
+        // 否则宁可判定不可视化编辑，也不要让一次保存悄悄改掉计费公式。
+        const regenerated = generateExprFromVisualConfig(cfg)
+        if (stripWhitespace(regenerated) === stripWhitespace(body)) {
+          return cfg
+        }
+      }
+    }
+
     const cacheVarNames = BILLING_CACHE_VAR_MAP.map((cv) => cv.exprVar)
     const optCacheStr = cacheVarNames
       .map((v) => `(?:\\s*\\+\\s*${v}\\s*\\*\\s*([\\d.eE+-]+))?`)
@@ -234,7 +302,7 @@ export function tryParseVisualConfig(
 
     const cfg = normalizeVisualConfig({ tiers })
     const regenerated = generateExprFromVisualConfig(cfg)
-    if (regenerated.replace(/\s+/g, '') !== body.replace(/\s+/g, '')) {
+    if (stripWhitespace(regenerated) !== stripWhitespace(body)) {
       return null
     }
     return cfg
@@ -252,6 +320,7 @@ const ESTIMATOR_VARS = [
   { var: 'cc', stateKey: 'cacheCreateTokens' },
   { var: 'cc1h', stateKey: 'cacheCreate1hTokens' },
   { var: 'img', stateKey: 'imageTokens' },
+  { var: 'img_cr', stateKey: 'cachedImageTokens' },
   { var: 'img_o', stateKey: 'imageOutputTokens' },
   { var: 'ai', stateKey: 'audioInputTokens' },
   { var: 'ao', stateKey: 'audioOutputTokens' },

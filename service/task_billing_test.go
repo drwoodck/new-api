@@ -11,7 +11,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/glebarez/sqlite"
 	"github.com/shopspring/decimal"
@@ -1242,4 +1244,144 @@ func TestSettle_NonPerCallBilling_AppliesAdaptorAdjustment(t *testing.T) {
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
+}
+
+// ===========================================================================
+// 表达式计费（tiered_expr）在任务完成时的结算
+// ===========================================================================
+
+// tieredSnapshotFor 构造一个「提交时冻结」的表达式快照，模拟
+// ModelPriceHelperPerCall 在预扣时写下的内容。
+func tieredSnapshotFor(expr string, groupRatio float64, preConsumed int) *billingexpr.BillingSnapshot {
+	return &billingexpr.BillingSnapshot{
+		BillingMode:              billing_setting.BillingModeTieredExpr,
+		ModelName:                "test-model",
+		ExprString:               expr,
+		ExprHash:                 billingexpr.ExprHashString(expr),
+		GroupRatio:               groupRatio,
+		EstimatedQuotaAfterGroup: preConsumed,
+		QuotaPerUnit:             testQuotaPerUnit,
+		ExprVersion:              billingexpr.DefaultExprVersion,
+	}
+}
+
+// 上游回报真实 token 后，任务额度必须按表达式重算，并把预扣多收的部分退回。
+func TestSettle_TieredExpr_SettlesByActualTokens(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 40, 40, 40
+	const initQuota = 100000
+	const preConsumed = 20000
+	const tokenRemain = 90000
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-tiered-expr", tokenRemain)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.TieredSnapshot = tieredSnapshotFor(
+		`tier("base", p * 4 + cr * 1 + img * 6.4 + img_cr * 1.6 + img_o * 24)`, 1, preConsumed)
+
+	// 实测 ToAPIs 文生图：12 文本输入 + 196 图片输出
+	taskResult := &relaycommon.TaskInfo{
+		Status:            model.TaskStatusSuccess,
+		PromptTokens:      12,
+		TextInputTokens:   12,
+		ImageOutputTokens: 196,
+		TotalTokens:       208,
+	}
+
+	settleTaskBillingOnComplete(ctx, &mockAdaptor{}, task, taskResult)
+
+	// (12*4 + 196*24) / 1e6 * 500000 = 2376
+	const wantQuota = 2376
+	assert.Equal(t, wantQuota, task.Quota)
+	assert.Equal(t, initQuota+(preConsumed-wantQuota), getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain+(preConsumed-wantQuota), getTokenRemainQuota(t, tokenID))
+}
+
+// 分组倍率在快照里冻结，结算按快照的倍率而不是当前配置。
+func TestSettle_TieredExpr_UsesFrozenGroupRatio(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 41, 41, 41
+	const initQuota = 100000
+	const preConsumed = 40000
+	const tokenRemain = 90000
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-tiered-group", tokenRemain)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	// 外部 vip1 的 2 倍分组倍率在提交时写进快照
+	task.PrivateData.BillingContext.TieredSnapshot = tieredSnapshotFor(
+		`tier("base", p * 4 + img_o * 24)`, 2, preConsumed)
+
+	taskResult := &relaycommon.TaskInfo{
+		Status:            model.TaskStatusSuccess,
+		PromptTokens:      12,
+		TextInputTokens:   12,
+		ImageOutputTokens: 196,
+		TotalTokens:       208,
+	}
+
+	settleTaskBillingOnComplete(ctx, &mockAdaptor{}, task, taskResult)
+
+	// ((12*4 + 196*24) / 1e6 * 500000) * 2 = 4752
+	assert.Equal(t, 4752, task.Quota)
+}
+
+// 上游没回报 token（按次计费的上游、或缺 usage 字段）时保持预扣不动 ——
+// 宁可按预扣结算并留痕，也不要凭空重算。
+func TestSettle_TieredExpr_NoTokenUsageKeepsPreConsumed(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 42, 42, 42
+	const initQuota, preConsumed = 100000, 12345
+	const tokenRemain = 90000
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-tiered-nousage", tokenRemain)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.TieredSnapshot = tieredSnapshotFor(
+		`tier("base", p * 4 + img_o * 24)`, 1, preConsumed)
+
+	settleTaskBillingOnComplete(ctx, &mockAdaptor{}, task,
+		&relaycommon.TaskInfo{Status: model.TaskStatusSuccess})
+
+	assert.Equal(t, preConsumed, task.Quota)
+	assert.Equal(t, initQuota, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, int64(0), countLogs(t))
+}
+
+// 没有表达式快照的任务（普通按次/档位任务）不能走到表达式结算里。
+func TestSettle_TieredExpr_IgnoredWithoutSnapshot(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 43, 43, 43
+	const initQuota, preConsumed = 100000, 5000
+	const tokenRemain = 90000
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-tiered-nosnap", tokenRemain)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+
+	settleTaskBillingOnComplete(ctx, &mockAdaptor{}, task, &relaycommon.TaskInfo{
+		Status:            model.TaskStatusSuccess,
+		PromptTokens:      12,
+		ImageOutputTokens: 196,
+		TotalTokens:       208,
+	})
+
+	assert.Equal(t, preConsumed, task.Quota)
 }

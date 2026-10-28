@@ -669,6 +669,11 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 	if settleVideoSecondBilling(ctx, task, taskResult) {
 		return
 	}
+	// 0.7 表达式计费：按上游回报的 token 明细重算，与预扣的差额多退少补。
+	//     放在 adaptor 钩子之前 —— 快照即权威，不需要任何适配器再插一手。
+	if RecalculateTaskQuotaByTieredExpr(ctx, task, taskResult) {
+		return
+	}
 	// 1. 优先让 adaptor 决定最终额度
 	if actualQuota := adaptor.AdjustBillingOnComplete(task, taskResult); actualQuota > 0 {
 		bc := task.PrivateData.BillingContext

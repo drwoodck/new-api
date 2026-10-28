@@ -2,6 +2,8 @@ package helper
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -9,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -106,6 +109,23 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	}
 
 	groupPricingEnabled := model.IsGroupPricingEnabled(info.OriginModelName)
+
+	// 同步图片也要走档位表（price_tiers）。旧实现只在按次任务链路（
+	// ModelPriceHelperPerCall）里查档表，同步图片完全没读，于是「同步 + 档位价」
+	// 的模型落到下面的标量分支：model_price/model_ratio 这两列对档位模型是空的，
+	// 算出来就是 0 —— 用户白拿图、站点白付上游钱（实测 paipu 四个 image_size
+	// 档位模型 430 次调用全部 0 元）。
+	if isSyncImageRelayMode(info.RelayMode) {
+		if priceData, handled, err := resolveSyncImageTierPrice(c, info, groupPricingEnabled, groupRatioInfo); err != nil {
+			return hosttypes.PriceData{}, err
+		} else if handled {
+			if common.DebugEnabled {
+				logger.LogDebug(c, "sync image tier price: %s", priceData.ToSetting())
+			}
+			info.PriceData = priceData
+			return priceData, nil
+		}
+	}
 
 	var modelPrice float64
 	var usePrice bool
@@ -250,6 +270,13 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 // ModelPriceHelperPerCall 按次/按量计费的 PriceHelper (MJ、Task)
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hosttypes.PriceData, error) {
 	groupRatioInfo := HandleGroupRatio(c, info)
+
+	// 表达式计费（tiered_expr）在任务链路同样以表达式为准，且与分组分别
+	// 定价互斥 —— 必须在查档表/分组价之前早返回，否则会先按档表算出固定价，
+	// 再被标记成"按次计费"从而跳过完成时的 token 差额结算。
+	if billing_setting.GetBillingMode(info.OriginModelName) == billing_setting.BillingModeTieredExpr {
+		return taskModelPriceHelperTiered(c, info, groupRatioInfo)
+	}
 
 	// 档位计费（price_tiers）：模型配置了档表时优先于此后的全部路径。
 	// NoTable（无档表）时继续走既有流程，旧模型行为完全不变。
@@ -427,6 +454,136 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 	return priceData, nil
 }
 
+// tieredTaskReserveImageTokens 是任务链路预扣时假定的「图片输出 token」数。
+//
+// 异步图片任务在提交时无法知道上游会产出多少 token（实测 ToAPIs
+// gpt-image-2.5-official：1024x1024 → 196 tokens，2880x2880 → 659 tokens），
+// 所以这里按「一张 1024x1024」作为基准预留量：够一个正常用户起步，又不会
+// 因为按上限预估把低余额用户挡在门外。真实金额由完成时的 token 结算退补 ——
+// 预扣只是占用，不是最终扣费。
+const tieredTaskReserveImageTokens = 196
+
+// taskTieredImageOutputTokens 按请求的像素尺寸放大预留量（线性于像素数）。
+//
+// 线性放大会比上游实际增长快（上游 2880x2880 实测 659，线性估 1551），
+// 方向是"多预留"——宁可多占一点余额，也不要少占到结算时才发现扣不动。
+// 拿不到像素尺寸（例如只给了比例 16:9）时退回基准预留量。
+func taskTieredImageOutputTokens(c *gin.Context) int {
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return tieredTaskReserveImageTokens
+	}
+	width, height, ok := parsePixelSize(req.Size)
+	if !ok {
+		return tieredTaskReserveImageTokens
+	}
+	tokens := float64(tieredTaskReserveImageTokens) * float64(width*height) / (1024 * 1024)
+	if tokens < tieredTaskReserveImageTokens {
+		return tieredTaskReserveImageTokens
+	}
+	return int(math.Round(tokens))
+}
+
+// parsePixelSize 解析 "1024x1024" / "1024*1024" 形式的像素尺寸。
+func parsePixelSize(size string) (int, int, bool) {
+	lower := strings.ToLower(strings.TrimSpace(size))
+	sep := ""
+	if strings.Contains(lower, "x") {
+		sep = "x"
+	} else if strings.Contains(lower, "*") {
+		sep = "*"
+	}
+	if sep == "" {
+		return 0, 0, false
+	}
+	parts := strings.SplitN(lower, sep, 2)
+	width, errW := strconv.Atoi(strings.TrimSpace(parts[0]))
+	height, errH := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if errW != nil || errH != nil || width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
+}
+
+// taskModelPriceHelperTiered 是表达式计费（tiered_expr）在任务链路上的预扣。
+//
+// 与同步链路 modelPriceHelperTiered 的区别：
+//   - 请求体解析路径不同（任务读 TaskSubmitReq，同步读已解析的请求 DTO）；
+//   - 输出 token 事前不可知，只按基准预留量预扣，完成时由
+//     settleTaskBillingOnComplete 用上游回报的实际 token 重算并退补。
+//
+// 结算阶段没有原始请求可复现，所以引用了 param()/header()/时间函数的表达式
+// 一律拒绝 —— 否则预扣与结算会按两套不同的条件计费，静默算错。
+func taskModelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, groupRatioInfo hosttypes.GroupRatioInfo) (hosttypes.PriceData, error) {
+	exprStr, ok := billing_setting.GetBillingExpr(info.OriginModelName)
+	if !ok {
+		return hosttypes.PriceData{}, fmt.Errorf("model %s is configured as tiered_expr but has no billing expression", info.OriginModelName)
+	}
+	if probe := firstRequestProbeVar(billingexpr.UsedVars(exprStr)); probe != "" {
+		return hosttypes.PriceData{}, fmt.Errorf(
+			"model %s 的计费表达式使用了请求条件 %q，异步任务在结算时无法复现该请求，暂不支持", info.OriginModelName, probe)
+	}
+
+	reserveOutputTokens := taskTieredImageOutputTokens(c)
+	rawCost, trace, err := billingexpr.RunExpr(exprStr, billingexpr.TokenParams{
+		ImgO: float64(reserveOutputTokens),
+	})
+	if err != nil {
+		return hosttypes.PriceData{}, fmt.Errorf("model %s tiered expr run failed: %w", info.OriginModelName, err)
+	}
+
+	quotaBeforeGroup := rawCost / 1_000_000 * common.QuotaPerUnit
+	preConsumedQuota, err := billingexpr.QuotaRoundStrict(quotaBeforeGroup * groupRatioInfo.GroupRatio)
+	if err != nil {
+		return hosttypes.PriceData{}, err
+	}
+
+	freeModel := false
+	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
+		if groupRatioInfo.GroupRatio == 0 {
+			preConsumedQuota = 0
+			freeModel = true
+		}
+	}
+
+	snapshot := &billingexpr.BillingSnapshot{
+		BillingMode:               billing_setting.BillingModeTieredExpr,
+		ModelName:                 info.OriginModelName,
+		ExprString:                exprStr,
+		ExprHash:                  billingexpr.ExprHashString(exprStr),
+		GroupRatio:                groupRatioInfo.GroupRatio,
+		EstimatedCompletionTokens: reserveOutputTokens,
+		EstimatedQuotaBeforeGroup: quotaBeforeGroup,
+		EstimatedQuotaAfterGroup:  preConsumedQuota,
+		EstimatedTier:             trace.MatchedTier,
+		QuotaPerUnit:              common.QuotaPerUnit,
+		ExprVersion:               billingexpr.ExprVersion(exprStr),
+	}
+	info.TieredBillingSnapshot = snapshot
+
+	priceData := hosttypes.PriceData{
+		FreeModel:         freeModel,
+		GroupRatioInfo:    groupRatioInfo,
+		Quota:             preConsumedQuota,
+		QuotaToPreConsume: preConsumedQuota,
+	}
+	info.PriceData = priceData
+
+	logger.LogDebug(c, "task_model_price_helper_tiered: model=%s reserveImgTokens=%d preConsume=%d groupRatio=%.2f tier=%s",
+		info.OriginModelName, reserveOutputTokens, preConsumedQuota, groupRatioInfo.GroupRatio, trace.MatchedTier)
+	return priceData, nil
+}
+
+// firstRequestProbeVar 返回表达式里用到的第一个请求条件函数名（没有则空串）。
+func firstRequestProbeVar(usedVars map[string]bool) string {
+	for _, name := range []string{"param", "header", "hour", "minute", "weekday", "month", "day"} {
+		if usedVars[name] {
+			return name
+		}
+	}
+	return ""
+}
+
 // buildVideoSecondPriceData 构造按秒计费的基础价格数据。
 // Quota 此处仅为「1 秒」的额度，时长倍率由 RelayTaskSubmit 统一应用。
 func buildVideoSecondPriceData(secondPrice float64, groupRatioInfo hosttypes.GroupRatioInfo) (hosttypes.PriceData, error) {
@@ -543,6 +700,56 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 // modelTierPriceNotAvailableError 档表模型的请求档位在当前分组未配置时的错误。
 // 与 modelGroupPriceNotAvailableError 同构：管理员看到"缺哪个档"，
 // 用户看到"请联系管理员"。
+// isSyncImageRelayMode 判定本次请求是否是同步图片（generations / edits）。
+// 只在这两个模式下尝试图片档位定价：档位表在别的 relay 模式里没有像素尺寸
+// 或分辨率输入，贸然按空输入解析会把「配了档表的模型」在聊天请求上判成
+// Unavailable，凭空打断正常调用。
+func isSyncImageRelayMode(relayMode int) bool {
+	switch relayMode {
+	case relayconstant.RelayModeImagesGenerations, relayconstant.RelayModeImagesEdits:
+		return true
+	}
+	return false
+}
+
+// resolveSyncImageTierPrice 用档表给同步图片请求定价。
+//
+// handled=false 表示该模型（或该分组）没有档表 —— 调用方继续走既有的标量路径，
+// 旧模型行为完全不变。Unavailable 是硬报错：档表存在但这次请求的档位没配价，
+// 宁可拒绝也不要按 0 元或错误档位收费。
+func resolveSyncImageTierPrice(
+	c *gin.Context,
+	info *relaycommon.RelayInfo,
+	groupPricingEnabled bool,
+	groupRatioInfo hosttypes.GroupRatioInfo,
+) (hosttypes.PriceData, bool, error) {
+	tierInput := relaycommon.BuildImageTierInput(c, info)
+
+	var resolved model.ResolvedTierPrice
+	if groupPricingEnabled {
+		row, err := model.GetModelGroupPrice(info.OriginModelName, info.UsingGroup)
+		if err != nil {
+			return hosttypes.PriceData{}, false, err
+		}
+		resolved = model.ResolveTierPriceFromRow(info.OriginModelName, info.UsingGroup, tierInput, row)
+	} else {
+		resolved = model.ResolveTierPriceUnified(info.OriginModelName, info.UserGroup, info.UsingGroup, tierInput)
+	}
+
+	switch resolved.Status {
+	case model.TierResolutionResolved:
+		priceData, err := buildTierPriceData(resolved, groupRatioInfo)
+		if err != nil {
+			return hosttypes.PriceData{}, false, err
+		}
+		return priceData, true, nil
+	case model.TierResolutionUnavailable:
+		return hosttypes.PriceData{}, false, modelTierPriceNotAvailableError(
+			info.OriginModelName, info.UsingGroup, resolved.TierKey, info.UserId)
+	}
+	return hosttypes.PriceData{}, false, nil
+}
+
 func modelTierPriceNotAvailableError(modelName, groupName, tierKey string, userId int) error {
 	tierDisplay := tierKey
 	if tierDisplay == "" {

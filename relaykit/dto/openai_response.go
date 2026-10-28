@@ -264,6 +264,12 @@ type InputTokenDetails struct {
 	TextTokens       int `json:"text_tokens"`
 	AudioTokens      int `json:"audio_tokens"`
 	ImageTokens      int `json:"image_tokens"`
+	// CachedImageTokens is the cached (cache-hit) part of ImageTokens.
+	// Upstreams that price cached image input separately from uncached image
+	// input report the split (ToAPIs: input_tokens_details.cached_tokens_details.
+	// image_tokens). CachedTokens remains the total of all cached input, so
+	// callers that only look at CachedTokens are unaffected.
+	CachedImageTokens int `json:"cached_image_tokens,omitempty"`
 }
 
 // CacheCreationTokensTotal returns the cache-write token count regardless of

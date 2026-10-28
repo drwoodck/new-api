@@ -38,6 +38,7 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	ai := float64(usage.PromptTokensDetails.AudioTokens)
 	imgO := float64(usage.CompletionTokenDetails.ImageTokens)
 	ao := float64(usage.CompletionTokenDetails.AudioTokens)
+	imgCR := float64(usage.PromptTokensDetails.CachedImageTokens)
 
 	// len = total input context length for tier condition evaluation.
 	// Non-Claude: prompt_tokens already includes everything.
@@ -47,9 +48,36 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		inputLen = p + cr + cc5m + cc1h
 	}
 
+	// img_cr 是「缓存命中的图片输入」。它同时属于 cr（全部缓存输入）与 img
+	// （全部图片输入），一旦表达式单独给它定价，就必须把这两边各减一次，
+	// 否则同一批 token 会被按缓存价和图片价重复计费。
+	//
+	// 只在表达式真的引用 img_cr 时才启用这套拆分：存量表达式没引用它，
+	// 走下面的原有口径，历史计费结果逐字节不变。
+	crPriced := cr
+	imgPriced := img
+	if !isClaudeUsageSemantic && usedVars["img_cr"] {
+		if imgCR < 0 {
+			imgCR = 0
+		}
+		if imgCR > cr {
+			imgCR = cr
+		}
+		if imgCR > img {
+			imgCR = img
+		}
+		crPriced = cr - imgCR
+		imgPriced = img - imgCR
+	}
+
 	if !isClaudeUsageSemantic {
 		if usedVars["cr"] {
+			// 减**全部**缓存输入（缓存文本 + 缓存图片）。缓存图片那部分虽然
+			// 由 img_cr 单独定价，但它同样不该留在 p 里按文本价再算一遍。
 			p -= cr
+		} else if usedVars["img_cr"] {
+			// 表达式没给 cr 定价，缓存图片仍要从 p 里摘出去，否则会按文本价重复计。
+			p -= imgCR
 		}
 		if usedVars["cc"] {
 			p -= cc5m
@@ -58,7 +86,8 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 			p -= cc1h
 		}
 		if usedVars["img"] {
-			p -= img
+			// 只减未缓存的图片输入：缓存图片已由上面的 cr / img_cr 覆盖。
+			p -= imgPriced
 		}
 		if usedVars["ai"] {
 			p -= ai
@@ -81,16 +110,17 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	}
 
 	return billingexpr.TokenParams{
-		P:    p,
-		C:    c,
-		Len:  inputLen,
-		CR:   cr,
-		CC:   cc5m,
-		CC1h: cc1h,
-		Img:  img,
-		ImgO: imgO,
-		AI:   ai,
-		AO:   ao,
+		P:     p,
+		C:     c,
+		Len:   inputLen,
+		CR:    crPriced,
+		CC:    cc5m,
+		CC1h:  cc1h,
+		Img:   imgPriced,
+		ImgCR: imgCR,
+		ImgO:  imgO,
+		AI:    ai,
+		AO:    ao,
 	}
 }
 

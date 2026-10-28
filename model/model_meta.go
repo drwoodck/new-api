@@ -59,6 +59,17 @@ type Model struct {
 	ModelRatio      float64 `json:"model_ratio,omitempty" gorm:"-"`
 	ModelPrice      float64 `json:"model_price,omitempty" gorm:"-"`
 	CompletionRatio float64 `json:"completion_ratio,omitempty" gorm:"-"`
+	// BillingMode 是计费模式的运行时字段:空 = 走固定价/档表/倍率的老路径,
+	// "tiered_expr" = 表达式计费。表达式模型的价格不在 models 表也不在
+	// model_group_prices 表里,而在 options 的 billing_setting.billing_expr ——
+	// 不把这件事告诉管理端,价格列就会因为"四条路全空"而显示成减号。
+	BillingMode string `json:"billing_mode,omitempty" gorm:"-"`
+	BillingExpr string `json:"billing_expr,omitempty" gorm:"-"`
+	// InputPricePerM / OutputPricePerM 把倍率口径折算成「每百万 token 的美元价」,
+	// 供管理端直接展示金额而不是裸倍率。只对纯倍率计费(model_ratio>0 且没有
+	// 固定价/档表)填充,折算口径与计费一致:usd = tokens × ratio / QuotaPerUnit。
+	InputPricePerM  float64 `json:"input_price_per_m,omitempty" gorm:"-"`
+	OutputPricePerM float64 `json:"output_price_per_m,omitempty" gorm:"-"`
 }
 
 func (mi *Model) Insert() error {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/types"
@@ -70,8 +71,8 @@ type Task struct {
 	// MySQL/SQLite/PostgreSQL 三家的 JSON 提取语法各不相同(JSON_EXTRACT /
 	// json_extract / ->>),且 JSON 表达式走不了索引。写入点只有一个(InitTask)。
 	// 加列由 AutoMigrate 完成,存量行为空(不回填)。
-	ModelName string                `json:"model_name" gorm:"type:varchar(191);index"`
-	Username  string                `json:"username,omitempty" gorm:"-"`
+	ModelName string `json:"model_name" gorm:"type:varchar(191);index"`
+	Username  string `json:"username,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
@@ -148,6 +149,10 @@ type TaskBillingContext struct {
 	// 做探测修正（RefreshMaterialDurationsAtSettle），不做重新定价。
 	MaterialQuota int                           `json:"material_quota,omitempty"`
 	Materials     []types.ResolvedInputMaterial `json:"materials,omitempty"`
+	// TieredSnapshot 表达式计费（tiered_expr）快照。非空时轮询结算按表达式
+	// 用上游回报的 token 用量重算 —— 表达式、分组倍率在提交时冻结，结算只
+	// 喂实际 token，不会因为管理员中途改价而影响在途任务。
+	TieredSnapshot *billingexpr.BillingSnapshot `json:"tiered_snapshot,omitempty"`
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）
@@ -228,15 +233,15 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 	}
 
 	t := &Task{
-		TaskID:      taskID,
-		UserId:      relayInfo.UserId,
-		Group:       relayInfo.UsingGroup,
-		SubmitTime:  time.Now().Unix(),
-		Status:      TaskStatusNotStart,
-		Progress:    "0%",
-		ChannelId:   relayInfo.ChannelId,
-		Platform:    platform,
-		Properties:  properties,
+		TaskID:     taskID,
+		UserId:     relayInfo.UserId,
+		Group:      relayInfo.UsingGroup,
+		SubmitTime: time.Now().Unix(),
+		Status:     TaskStatusNotStart,
+		Progress:   "0%",
+		ChannelId:  relayInfo.ChannelId,
+		Platform:   platform,
+		Properties: properties,
 		// 取已填好的 properties 而非 relayInfo.OriginModelName:上面那段填
 		// properties 的前提是 ChannelMeta 非空,直接解引用 relayInfo 在这里
 		// 既多一个 nil 风险,也可能与 properties 里的值不一致。

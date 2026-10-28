@@ -17,7 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
+// describe/test 必须来自 vitest：从 node:test 引会在 vite 打包阶段直接报
+// 「Cannot bundle Node.js built-in "node:test"」，整个文件连一条用例都跑不起来。
+// assert 仍用 node:assert/strict —— 抛出的 AssertionError vitest 一样记为失败。
+import { describe, test } from 'vitest'
 
 import {
   buildModelSnapshots,

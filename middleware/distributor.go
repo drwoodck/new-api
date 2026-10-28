@@ -336,6 +336,13 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		if _, ok := c.Get("relay_mode"); !ok {
 			c.Set("relay_mode", relayMode)
 		}
+	} else if strings.HasPrefix(c.Request.URL.Path, "/v1/images/") && c.Request.Method == http.MethodGet {
+		// 异步生图任务查询 GET /v1/images/{task_id}：
+		// 与视频查询同理 —— 请求里没有 body/model，渠道由任务行决定，
+		// 不能进下面的「从 body 取 model」分支（GET 无 body 会直接 400）。
+		c.Set("relay_mode", relayconstant.RelayModeImageFetchByID)
+		shouldSelectChannel = false
+		modelRequest.Model = getTaskOriginModelName(c)
 	} else if strings.HasPrefix(c.Request.URL.Path, "/v1beta/models/") || strings.HasPrefix(c.Request.URL.Path, "/v1/models/") {
 		// Gemini API 路径处理: /v1beta/models/gemini-2.0-flash:generateContent
 		relayMode := relayconstant.RelayModeGemini

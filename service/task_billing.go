@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -17,6 +18,42 @@ import (
 
 // materialLogURLLimit 是持久化与日志里 data: URI 的保留长度。
 const materialLogURLLimit = 128
+
+// RecalculateTaskQuotaByTieredExpr 是表达式计费（tiered_expr）在任务完成时的
+// 结算入口。
+//
+// 与同步链路的 TryTieredSettle 同一套计算（同一个快照、同一个表达式引擎、
+// 同一套 token 归一化），区别只在于数据来源：任务没有 RelayInfo，token 用量
+// 来自上游轮询结果里的 usage。快照在提交时冻结，这里不查任何配置。
+//
+// 上游没回报 token（按次计费的上游、或回报体里没有 usage）时保持预扣不动并
+// 记一条 warn —— 静默不结算比退补失败更容易被发现。
+func RecalculateTaskQuotaByTieredExpr(ctx context.Context, task *model.Task, taskResult *relaycommon.TaskInfo) bool {
+	bc := task.PrivateData.BillingContext
+	if bc == nil || bc.TieredSnapshot == nil {
+		return false
+	}
+	usage := taskResult.Usage()
+	if usage == nil {
+		logger.LogWarn(ctx, fmt.Sprintf("任务 %s 走表达式计费，但上游未回报 token 用量，保持预扣额度 %d",
+			task.TaskID, bc.TieredSnapshot.EstimatedQuotaAfterGroup))
+		return true
+	}
+
+	usedVars := billingexpr.UsedVars(bc.TieredSnapshot.ExprString)
+	params := BuildTieredTokenParams(usage, false, usedVars)
+	result, err := billingexpr.ComputeTieredQuota(bc.TieredSnapshot, params)
+	if err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("任务 %s 表达式结算失败，保持预扣额度 %d：%s",
+			task.TaskID, bc.TieredSnapshot.EstimatedQuotaAfterGroup, err.Error()))
+		return true
+	}
+
+	reason := fmt.Sprintf("表达式结算：tokens(p=%.0f c=%.0f cr=%.0f img=%.0f img_cr=%.0f img_o=%.0f) tier=%s",
+		params.P, params.C, params.CR, params.Img, params.ImgCR, params.ImgO, result.MatchedTier)
+	RecalculateTaskQuota(ctx, task, result.ActualQuotaAfterGroup, reason, result.Clamp)
+	return true
+}
 
 // SanitizeMaterialsForLog 返回用于 BillingContext 快照与消费日志的素材副本：
 // data: URI 截断为前 128 字符并附注原始长度，避免 base64 内联数据撑爆私有

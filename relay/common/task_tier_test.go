@@ -1,10 +1,13 @@
 package common
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 
+	hostcommon "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,17 +18,17 @@ func TestResolutionFromDimensionString(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"720x1280", "720p"},       // 竖屏：短边 720
-		{"1280x720", "720p"},       // 横屏：短边 720
-		{"1920x1080", "1080p"},     // 1080p 横屏
-		{"832*480", "480p"},        // 通义万相用 * 分隔
-		{"1792x1024", "720p"},      // 短边 1024 → 720p 档
-		{"3840x2160", "4k"},        // 短边 ≥2000 → 4k
-		{"1080p", "1080p"},         // 标签透传
-		{"1080P", "1080p"},         // 大小写归一化
-		{"4K", "4k"},               // 4k 归一化
-		{"", ""},                   // 空
-		{"junk", "junk"},           // 无法解析原样（档表没有即 Unavailable，不错配）
+		{"720x1280", "720p"},               // 竖屏：短边 720
+		{"1280x720", "720p"},               // 横屏：短边 720
+		{"1920x1080", "1080p"},             // 1080p 横屏
+		{"832*480", "480p"},                // 通义万相用 * 分隔
+		{"1792x1024", "720p"},              // 短边 1024 → 720p 档
+		{"3840x2160", "4k"},                // 短边 ≥2000 → 4k
+		{"1080p", "1080p"},                 // 标签透传
+		{"1080P", "1080p"},                 // 大小写归一化
+		{"4K", "4k"},                       // 4k 归一化
+		{"", ""},                           // 空
+		{"junk", "junk"},                   // 无法解析原样（档表没有即 Unavailable，不错配）
 		{"720x1280x1080", "720x1280x1080"}, // 多段无法解析原样
 	}
 	for _, c := range cases {
@@ -38,6 +41,60 @@ func taskCtxWithRequest(t *testing.T, req TaskSubmitReq) *gin.Context {
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Set("task_request", req)
 	return ctx
+}
+
+// imageTierCtx 造一个「已解析好」的同步图片请求上下文。档位输入读的是
+// info.Request（*dto.ImageRequest）上的 Size 与 Extra，而不是重新读请求体 ——
+// 计费阶段再摸 body storage 会跟解析顺序耦合（线上曾因此 panic）。渠道类型走
+// context（Distribute 阶段写入），因为计费发生时 info.ChannelMeta 还是 nil。
+func imageTierCtx(t *testing.T, size string, extra map[string]string) (*gin.Context, *RelayInfo) {
+	t.Helper()
+	raw := make(map[string]json.RawMessage, len(extra))
+	for key, value := range extra {
+		raw[key] = json.RawMessage(`"` + value + `"`)
+	}
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	hostcommon.SetContextKey(ctx, constant.ContextKeyChannelType, constant.ChannelTypeOpenAI)
+	return ctx, &RelayInfo{Request: &dto.ImageRequest{Model: "m", Prompt: "x", Size: size, Extra: raw}}
+}
+
+func TestBuildImageTierInputReadsResolution(t *testing.T) {
+	ctx, info := imageTierCtx(t, "", map[string]string{"resolution": "1K"})
+	input := BuildImageTierInput(ctx, info)
+	assert.Equal(t, "1K", input.ImageSize, "resolution 的 1K/2K/4K 形态必须落到 image_size 维度")
+}
+
+func TestBuildImageTierInputNormalizesImageSizeAlias(t *testing.T) {
+	ctx, info := imageTierCtx(t, "", map[string]string{"image_size": "2k"})
+	input := BuildImageTierInput(ctx, info)
+	assert.Equal(t, "2K", input.ImageSize, "image_size 是同一维度的别名，需归一化成大写档位键")
+}
+
+func TestBuildImageTierInputFallsBackToSize(t *testing.T) {
+	ctx, info := imageTierCtx(t, "1920x1080", nil)
+	input := BuildImageTierInput(ctx, info)
+	assert.Equal(t, "1080p", input.Resolution, "只有像素尺寸时按短边推视频分辨率档")
+	assert.Empty(t, input.ImageSize, "像素尺寸不是 image_size 档，不能瞎猜 1K")
+}
+
+// 回归：计费发生在 channel 选定之前，那时 info.ChannelMeta 是 nil。
+// 读提升字段 info.ChannelType 会空指针 panic —— 线上真实踩过（HTTP 500
+// new_api_panic），所以这里必须能在 ChannelMeta 为 nil 时正常返回。
+func TestBuildImageTierInputToleratesNilChannelMeta(t *testing.T) {
+	ctx, info := imageTierCtx(t, "", map[string]string{"resolution": "4K"})
+	info.ChannelMeta = nil
+
+	require.NotPanics(t, func() {
+		input := BuildImageTierInput(ctx, info)
+		assert.Equal(t, "4K", input.ImageSize)
+	})
+}
+
+func TestBuildImageTierInputEmptyWithoutImageRequest(t *testing.T) {
+	ctx, _ := imageTierCtx(t, "", nil)
+	input := BuildImageTierInput(ctx, &RelayInfo{})
+	assert.Empty(t, input.ImageSize)
+	assert.Empty(t, input.Resolution)
 }
 
 func TestBuildTaskTierInputSoraFromSize(t *testing.T) {

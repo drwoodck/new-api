@@ -641,6 +641,9 @@ func RelayTask(c *gin.Context) {
 			// SanitizeMaterialsForLog 截断，避免 base64 内联数据落库。
 			MaterialQuota: relayInfo.PriceData.MaterialQuota,
 			Materials:     service.SanitizeMaterialsForLog(relayInfo.PriceData.Materials),
+			// 表达式计费快照：完成时按上游回报的 token 用量重算。快照里带着
+			// 表达式原文、分组倍率与配额单位，结算不需要再查任何配置。
+			TieredSnapshot: relayInfo.TieredBillingSnapshot,
 		}
 		task.Quota = result.Quota
 		task.Data = result.TaskData
