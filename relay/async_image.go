@@ -146,12 +146,29 @@ func hostMatchesDomain(host, domain string) bool {
 // the task pipeline: the client asked for task mode AND the selected channel
 // actually has an async upstream.
 //
-// Both halves are required. The canvas image contract now always sends
-// `?async=true` (it is async_poll so that async upstreams can be polled, with
-// sync responses short-circuiting on the first reply), so a synchronous channel
-// must keep ignoring the flag instead of being pushed into the task pipeline.
+// Both halves are required. The canvas image contract (relay_image_async_v1)
+// is async_poll and sends `?async=true`; the same contract serves synchronous
+// channels too (their first response already carries the image, so the client
+// short-circuits without polling), which is why such a channel must keep
+// ignoring the flag instead of being pushed into the task pipeline.
+//
+// Older canvas builds declared that contract sync and omitted the flag. They
+// then reach rejectSyncImageOnAsyncChannel and get 400 async_image_required —
+// a client contract mismatch, not a channel misconfiguration.
 func ShouldUseAsyncImageTask(c *gin.Context) bool {
 	return IsAsyncImageRequest(c) && AsyncImageProviderForRequest(c) != ""
+}
+
+// IsSyncImageTaskRequest reports whether the client asked for task mode on a
+// channel explicitly configured as a slow *synchronous* upstream
+// (`async_image_provider = "sync_task"`).
+//
+// Such a channel has no task API of its own, so the server wraps the ordinary
+// synchronous call in a background job and returns only a task id. That keeps
+// the request far below Cloudflare's 100-second origin timeout, which is what
+// produced 524s on 2–5 minute image models while the upstream kept generating.
+func IsSyncImageTaskRequest(c *gin.Context) bool {
+	return IsAsyncImageRequest(c) && AsyncImageProviderForRequest(c) == constant.AsyncImageProviderSyncTask
 }
 
 // AsyncImagePlatformForRequest resolves the task platform for an async image

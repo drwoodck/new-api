@@ -89,8 +89,64 @@ func TestShouldUseAsyncImageTask(t *testing.T) {
 	})
 }
 
-func TestAsyncImagePlatformForRequest(t *testing.T) {
-	c := newImageRequestContext(t, "", "application/json", `{}`)
+// 慢同步渠道:显式配了 async_image_provider=sync_task,客户端带 ?async=true 时
+// 必须走「后台跑同步调用 + 立刻返回 task_id」的包装,否则 2–5 分钟的出图会被
+// Cloudflare 的 100 秒源站超时掐成 524。
+func TestIsSyncImageTaskRequest(t *testing.T) {
+	syncTaskSettings := dto.ChannelOtherSettings{AsyncImageProvider: constant.AsyncImageProviderSyncTask}
+
+	t.Run("explicit sync_task channel with async request is wrapped", func(t *testing.T) {
+		c := newImageRequestContext(t, "async=true", "application/json", `{"prompt":"cat"}`)
+		common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, "https://mirror.example.com")
+		common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, syncTaskSettings)
+		assert.True(t, IsSyncImageTaskRequest(c))
+		// 包装路径优先于「渠道有异步上游」的判定,两者不能同时命中
+		assert.True(t, ShouldUseAsyncImageTask(c), "provider 非空,shouldUse 也为真 —— 路由必须让 sync_task 分支先走")
+	})
+
+	t.Run("per-model override can mark a single slow model", func(t *testing.T) {
+		c := newImageRequestContext(t, "async=true", "application/json", `{"prompt":"cat"}`)
+		c.Set("original_model", "lec-nw-image-2")
+		common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, "https://api.kungai.cc")
+		common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, dto.ChannelOtherSettings{
+			AsyncImageProviderModels: map[string]string{"lec-nw-image-2": constant.AsyncImageProviderSyncTask},
+		})
+		assert.True(t, IsSyncImageTaskRequest(c))
+
+		// 同渠道的其它模型不受影响,保持同步
+		other := newImageRequestContext(t, "async=true", "application/json", `{"prompt":"cat"}`)
+		other.Set("original_model", "lec-tinysnow-image-2")
+		common.SetContextKey(other, constant.ContextKeyChannelBaseUrl, "https://api.kungai.cc")
+		common.SetContextKey(other, constant.ContextKeyChannelOtherSetting, dto.ChannelOtherSettings{
+			AsyncImageProviderModels: map[string]string{"lec-nw-image-2": constant.AsyncImageProviderSyncTask},
+		})
+		assert.False(t, IsSyncImageTaskRequest(other))
+	})
+
+	t.Run("needs the async flag from the client", func(t *testing.T) {
+		c := newImageRequestContext(t, "", "application/json", `{"prompt":"cat"}`)
+		common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, "https://mirror.example.com")
+		common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, syncTaskSettings)
+		assert.False(t, IsSyncImageTaskRequest(c), "普通同步客户端(不带 async)照旧走同步链路")
+	})
+
+	t.Run("other providers are not wrapped", func(t *testing.T) {
+		c := newImageRequestContext(t, "async=true", "application/json", `{"prompt":"cat"}`)
+		common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, "https://toapis.cn")
+		assert.False(t, IsSyncImageTaskRequest(c))
+	})
+
+	t.Run("platform resolves for sync_task", func(t *testing.T) {
+		c := newImageRequestContext(t, "async=true", "application/json", `{"prompt":"cat"}`)
+		common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, "https://mirror.example.com")
+		common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, syncTaskSettings)
+		platform, ok := AsyncImagePlatformForRequest(c)
+		require.True(t, ok)
+		assert.Equal(t, constant.TaskPlatformSyncImage, platform)
+	})
+}
+
+func TestAsyncImagePlatformForRequest(t *testing.T) {	c := newImageRequestContext(t, "", "application/json", `{}`)
 
 	_, ok := AsyncImagePlatformForRequest(c)
 	assert.False(t, ok, "a channel without a recognisable upstream must not resolve to a platform")

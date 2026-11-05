@@ -125,9 +125,20 @@ func SetRelayRouter(router *gin.Engine) {
 			// 走任务管线（预扣→轮询→结算/退款），返回 {task_id,status}，
 			// 查询见 GET /v1/images/{task_id}。
 			//
-			// 必须同时要求「该渠道确实配了异步上游」：画布图片契约改 async_poll 后
+			// 必须同时要求「该渠道确实配了异步上游」：画布的图片契约是 async_poll，
 			// 会对**所有**图片模型带 ?async=true，同步渠道（paipu/奶龙等）不能因此
 			// 被推进任务管线 —— 对它们来说这个参数是噪声，照旧走同步转发。
+			//
+			// 旧版画布把该契约声明成 sync、不带这个参数，会落到下面的
+			// rejectSyncImageOnAsyncChannel 得到 400 async_image_required ——
+			// 那是客户端契约过旧，不是渠道配错。
+			// 同步渠道但显式配了 async_image_provider=sync_task:慢生图渠道。
+			// 立刻返回 task_id、后台跑同步调用 —— 出图 2–5 分钟也不会被 Cloudflare
+			// 的 100 秒源站超时掐成 524(上游其实已经生成成功,结果却谁也拿不到)。
+			if relay.IsSyncImageTaskRequest(c) {
+				controller.RelaySyncImageAsTask(c)
+				return
+			}
 			if relay.ShouldUseAsyncImageTask(c) {
 				c.Set("relay_mode", relayconstant.RelayModeImageSubmit)
 				controller.RelayTask(c)
@@ -237,7 +248,10 @@ func SetRelayRouter(router *gin.Engine) {
 // pays once and receives a `{"object":"generation.task"}` blob. Returning a 400
 // keeps the failure visible and free.
 func rejectSyncImageOnAsyncChannel(c *gin.Context) bool {
-	if relay.AsyncImageProviderForRequest(c) == "" {
+	provider := relay.AsyncImageProviderForRequest(c)
+	// sync_task 只是「慢同步渠道优先用任务」,同步调用本身是允许的(例如第三方
+	// OpenAI 客户端不会带 ?async=true);只有真正的异步上游才必须任务化。
+	if provider == "" || provider == constant.AsyncImageProviderSyncTask {
 		return false
 	}
 	c.JSON(http.StatusBadRequest, gin.H{
